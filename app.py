@@ -29,6 +29,35 @@ st.warning(
 
 
 # ============================================================
+# UI HELPERS
+# ============================================================
+
+def display_card(label, value, font_size=30):
+    st.markdown(
+        f"""
+        <div style="
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            padding: 16px;
+            min-height: 112px;
+            background: white;
+            overflow-wrap: anywhere;
+            word-break: break-word;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+        ">
+            <div style="font-size: 14px; color: #6b7280; margin-bottom: 8px;">
+                {label}
+            </div>
+            <div style="font-size: {font_size}px; font-weight: 700; line-height: 1.15;">
+                {value}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+
+# ============================================================
 # TICKER RESOLVER
 # ============================================================
 
@@ -1537,16 +1566,26 @@ if setup is None:
 st.subheader("Trade Decision Dashboard")
 
 top1, top2, top3, top4 = st.columns(4)
-top1.metric("Input", ticker_input)
-top2.metric("Resolved Ticker", ticker)
-top3.metric("Price", f"${setup['price']:.2f}")
-top4.metric("Preferred Side", setup["preferred_side"].upper())
+with top1:
+    display_card("Input", ticker_input, font_size=26)
+with top2:
+    display_card("Resolved Ticker", ticker, font_size=32)
+with top3:
+    display_card("Price", f"${setup['price']:.2f}", font_size=32)
+with top4:
+    display_card("Preferred Side", setup["preferred_side"].upper(), font_size=32)
+
+st.markdown("")
 
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("Stock Setup Score", setup["stock_score"])
-m2.metric("Call Setup Score", setup["call_score"])
-m3.metric("Put Setup Score", setup["put_score"])
-m4.metric("Setup", setup["signal"])
+with m1:
+    display_card("Stock Setup Score", setup["stock_score"], font_size=32)
+with m2:
+    display_card("Call Setup Score", setup["call_score"], font_size=32)
+with m3:
+    display_card("Put Setup Score", setup["put_score"], font_size=32)
+with m4:
+    display_card("Setup", setup["signal"], font_size=24)
 
 if setup["signal"] == "NO TRADE / WAIT":
     st.warning("Current stock setup is weak. A good option contract alone does not make this a trade.")
@@ -1563,10 +1602,14 @@ else:
 st.subheader("Market, News, and Earnings Risk")
 
 risk1, risk2, risk3, risk4 = st.columns(4)
-risk1.metric("Market Bias", market["bias"])
-risk2.metric("VIX", "-" if np.isnan(market["vix"]) else f"{market['vix']:.2f}")
-risk3.metric("News Sentiment", news_label)
-risk4.metric("Earnings Risk", earnings_risk)
+with risk1:
+    display_card("Market Bias", market["bias"], font_size=24)
+with risk2:
+    display_card("VIX", "-" if np.isnan(market["vix"]) else f"{market['vix']:.2f}", font_size=32)
+with risk3:
+    display_card("News Sentiment", news_label, font_size=24)
+with risk4:
+    display_card("Earnings Risk", earnings_risk, font_size=24)
 
 if earnings_date:
     st.write(f"**Earnings Date:** {earnings_date} | **Days Away:** {earnings_days}")
@@ -1580,6 +1623,8 @@ elif earnings_risk == "Medium":
 # ============================================================
 # TECHNICAL METRICS
 # ============================================================
+
+st.subheader("Technical Levels")
 
 c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("RSI", f"{setup['rsi']:.1f}")
@@ -1679,10 +1724,14 @@ try:
         st.subheader("Final Trade Decision")
 
         d1, d2, d3, d4 = st.columns(4)
-        d1.metric("Stock Setup Score", setup["stock_score"])
-        d2.metric("Option Quality Score", option_score)
-        d3.metric("Final Trade Score", final_score)
-        d4.metric("Decision", decision)
+        with d1:
+            display_card("Stock Setup Score", setup["stock_score"], font_size=32)
+        with d2:
+            display_card("Option Quality Score", option_score, font_size=32)
+        with d3:
+            display_card("Final Trade Score", final_score, font_size=32)
+        with d4:
+            display_card("Decision", decision, font_size=22)
 
         if decision == "TRADE CANDIDATE":
             st.success(f"{decision}: {decision_reason}")
@@ -1838,7 +1887,34 @@ st.subheader("Recent News")
 if news_df.empty:
     st.info("No recent news found.")
 else:
-    st.dataframe(news_df, use_container_width=True, height=300)
+    for _, row in news_df.iterrows():
+        title = row.get("Title", "")
+        publisher = row.get("Publisher", "")
+        published = row.get("Published", "")
+        link = row.get("Link", "")
 
-st.markdown("---")
-st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Data source: yfinance")
+        if link:
+            st.markdown(
+                f"""
+                <div style="
+                    border: 1px solid #e5e7eb;
+                    border-radius: 12px;
+                    padding: 14px;
+                    margin-bottom: 10px;
+                    background: white;
+                ">
+                    <div style="font-size: 18px; font-weight: 700;">
+                        <a href="{link}" target="_blank" style="text-decoration: none;">
+                            {title}
+                        </a>
+                    </div>
+                    <div style="font-size: 13px; color: #6b7280; margin-top: 6px;">
+                        {publisher} | {published}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+        else:
+            st.write(f"**{title}**")
+            st.caption(f"{publisher} | {published}")
