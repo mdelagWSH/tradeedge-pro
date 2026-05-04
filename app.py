@@ -1,6 +1,7 @@
 import os
 import math
 import json
+import html
 import urllib.parse
 import urllib.request
 from datetime import datetime, date
@@ -18,9 +19,153 @@ from ta.trend import MACD
 from ta.volatility import AverageTrueRange
 
 
-st.set_page_config(page_title="Options Edge Terminal", layout="wide", initial_sidebar_state="expanded")
+# ============================================================
+# PAGE SETUP
+# ============================================================
 
-st.title("Options Edge Terminal")
+st.set_page_config(
+    page_title="TradeEdge Pro",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+st.markdown("""
+<style>
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    #MainMenu {visibility: hidden;}
+    .stDeployButton {display:none;}
+
+    .block-container {
+        padding-top: 1rem;
+        padding-bottom: 2rem;
+        max-width: 1500px;
+    }
+
+    [data-testid="stSidebar"] {
+        background: #0f172a;
+    }
+
+    [data-testid="stSidebar"] * {
+        color: #f8fafc !important;
+    }
+
+    [data-testid="stSidebar"] input,
+    [data-testid="stSidebar"] textarea,
+    [data-testid="stSidebar"] select {
+        color: #111827 !important;
+    }
+
+    h1 {
+        font-size: 2.1rem !important;
+        font-weight: 800 !important;
+        letter-spacing: -0.03em;
+    }
+
+    h2, h3 {
+        font-weight: 750 !important;
+        letter-spacing: -0.02em;
+    }
+
+    button {
+        border-radius: 12px !important;
+        font-weight: 700 !important;
+    }
+
+    div[data-testid="stMetric"] {
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        padding: 14px;
+        border-radius: 14px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    }
+
+    .stDataFrame {
+        border-radius: 14px;
+        overflow: hidden;
+    }
+
+    .app-card {
+        border: 1px solid #e5e7eb;
+        border-radius: 16px;
+        padding: 16px;
+        min-height: 112px;
+        background: #ffffff;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        margin-bottom: 10px;
+    }
+
+    .app-card-label {
+        font-size: 13px;
+        color: #64748b;
+        margin-bottom: 8px;
+        font-weight: 650;
+        text-transform: uppercase;
+        letter-spacing: 0.03em;
+    }
+
+    .app-card-value {
+        font-weight: 800;
+        line-height: 1.12;
+        color: #0f172a;
+    }
+
+    .news-card {
+        border: 1px solid #e5e7eb;
+        border-radius: 14px;
+        padding: 14px;
+        margin-bottom: 10px;
+        background: white;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+    }
+
+    .news-card a {
+        color: #0f172a;
+        text-decoration: none;
+        font-weight: 800;
+        font-size: 17px;
+    }
+
+    .news-card a:hover {
+        text-decoration: underline;
+    }
+
+    .news-meta {
+        font-size: 13px;
+        color: #64748b;
+        margin-top: 6px;
+    }
+
+    @media only screen and (max-width: 768px) {
+        .block-container {
+            padding-left: 0.75rem;
+            padding-right: 0.75rem;
+        }
+
+        h1 {
+            font-size: 1.55rem !important;
+        }
+
+        h2, h3 {
+            font-size: 1.15rem !important;
+        }
+
+        div[data-testid="column"] {
+            min-width: 100% !important;
+        }
+
+        .app-card {
+            min-height: auto;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
+
+st.title("TradeEdge Pro")
+st.caption("Options trading terminal with stock setup scoring, option quality scoring, spread strategies, news, and risk filters.")
 
 st.warning(
     "Educational decision-support only. This does not guarantee winners. "
@@ -33,28 +178,50 @@ st.warning(
 # ============================================================
 
 def display_card(label, value, font_size=30):
+    safe_label = html.escape(str(label))
+    safe_value = html.escape(str(value))
+
     st.markdown(
         f"""
-        <div style="
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            padding: 16px;
-            min-height: 112px;
-            background: white;
-            overflow-wrap: anywhere;
-            word-break: break-word;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.04);
-        ">
-            <div style="font-size: 14px; color: #6b7280; margin-bottom: 8px;">
-                {label}
-            </div>
-            <div style="font-size: {font_size}px; font-weight: 700; line-height: 1.15;">
-                {value}
+        <div class="app-card">
+            <div class="app-card-label">{safe_label}</div>
+            <div class="app-card-value" style="font-size:{font_size}px;">
+                {safe_value}
             </div>
         </div>
         """,
         unsafe_allow_html=True
     )
+
+
+def clickable_news_card(title, publisher, published, link):
+    safe_title = html.escape(str(title))
+    safe_publisher = html.escape(str(publisher))
+    safe_published = html.escape(str(published))
+    safe_link = html.escape(str(link))
+
+    if safe_link:
+        st.markdown(
+            f"""
+            <div class="news-card">
+                <a href="{safe_link}" target="_blank" rel="noopener noreferrer">
+                    {safe_title}
+                </a>
+                <div class="news-meta">{safe_publisher} | {safe_published}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+    else:
+        st.markdown(
+            f"""
+            <div class="news-card">
+                <div style="font-weight:800;font-size:17px;">{safe_title}</div>
+                <div class="news-meta">{safe_publisher} | {safe_published}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
 
 # ============================================================
@@ -331,10 +498,8 @@ def get_earnings_warning(ticker):
 
         if 0 <= days <= 3:
             return "High", earnings_date, days
-
         if 4 <= days <= 10:
             return "Medium", earnings_date, days
-
         if days > 10:
             return "Low", earnings_date, days
 
@@ -390,9 +555,7 @@ def add_indicators(df):
             "ATR", "VOL_RATIO"
         ]
 
-        data = data.dropna(subset=required_cols)
-
-        return data
+        return data.dropna(subset=required_cols)
 
     except Exception:
         return pd.DataFrame()
@@ -426,12 +589,8 @@ def score_news_sentiment(news_df):
 
     for title in news_df["Title"].fillna("").head(10):
         text = str(title).lower()
-
-        pos_hits = [w for w in POSITIVE_WORDS if w in text]
-        neg_hits = [w for w in NEGATIVE_WORDS if w in text]
-
-        score += 10 * len(pos_hits)
-        score -= 10 * len(neg_hits)
+        score += 10 * len([w for w in POSITIVE_WORDS if w in text])
+        score -= 10 * len([w for w in NEGATIVE_WORDS if w in text])
 
     score = int(max(-100, min(100, score)))
 
@@ -456,13 +615,7 @@ def market_filter():
         vix = get_price_data("^VIX", "3mo", "1d")
 
         if spy.empty or qqq.empty:
-            return {
-                "bias": "Unknown",
-                "call_ok": True,
-                "put_ok": True,
-                "vix": np.nan,
-                "details": "Market data unavailable"
-            }
+            return {"bias": "Unknown", "call_ok": True, "put_ok": True, "vix": np.nan}
 
         spy_last = spy.iloc[-1]
         qqq_last = qqq.iloc[-1]
@@ -493,22 +646,10 @@ def market_filter():
         if not np.isnan(vix_value) and vix_value >= 25:
             bias = f"{bias} / High Volatility"
 
-        return {
-            "bias": bias,
-            "call_ok": call_ok,
-            "put_ok": put_ok,
-            "vix": vix_value,
-            "details": f"SPY bullish: {spy_bull}, QQQ bullish: {qqq_bull}"
-        }
+        return {"bias": bias, "call_ok": call_ok, "put_ok": put_ok, "vix": vix_value}
 
     except Exception:
-        return {
-            "bias": "Unknown",
-            "call_ok": True,
-            "put_ok": True,
-            "vix": np.nan,
-            "details": "Market filter failed"
-        }
+        return {"bias": "Unknown", "call_ok": True, "put_ok": True, "vix": np.nan}
 
 
 # ============================================================
@@ -688,7 +829,7 @@ def score_stock_setup(df, news_score=0, earnings_risk="Unknown"):
 
 
 # ============================================================
-# OPTION QUALITY
+# OPTION QUALITY + SPREADS
 # ============================================================
 
 def prepare_chain(chain):
@@ -697,10 +838,7 @@ def prepare_chain(chain):
 
     df = chain.copy()
 
-    for col in [
-        "bid", "ask", "lastPrice", "strike", "volume",
-        "openInterest", "impliedVolatility", "contractSymbol"
-    ]:
+    for col in ["bid", "ask", "lastPrice", "strike", "volume", "openInterest", "impliedVolatility", "contractSymbol"]:
         if col not in df.columns:
             df[col] = np.nan
 
@@ -728,60 +866,34 @@ def prepare_chain(chain):
 
 def option_quality_score(row, min_delta, max_delta, min_volume, min_oi, max_spread_pct, max_cost):
     score = 0
-
     abs_delta = abs(row.get("delta", np.nan))
 
     if min_delta <= abs_delta <= max_delta:
         score += 25
-
     if row.get("spread_pct", 999) <= max_spread_pct:
         score += 25
-
     if row.get("volume", 0) >= min_volume:
         score += 20
-
     if row.get("openInterest", 0) >= min_oi:
         score += 20
-
     if row.get("cost_ask", 999999) <= max_cost:
         score += 10
 
     return int(max(0, min(100, score)))
 
 
-def build_options_table(
-    chain,
-    option_type,
-    stock_price,
-    exp,
-    stock_setup_score,
-    min_delta,
-    max_delta,
-    min_volume,
-    min_oi,
-    max_spread_pct,
-    max_cost
-):
+def build_options_table(chain, option_type, stock_price, exp, stock_setup_score, min_delta, max_delta, min_volume, min_oi, max_spread_pct, max_cost):
     try:
         df = prepare_chain(chain)
-
         if df.empty:
             return pd.DataFrame()
 
         T = max(dte(exp) / 365, 1 / 365)
         r = 0.045
 
-        df["delta"] = df.apply(
-            lambda x: bs_delta(stock_price, x["strike"], T, r, x["impliedVolatility"], option_type),
-            axis=1
-        )
-
+        df["delta"] = df.apply(lambda x: bs_delta(stock_price, x["strike"], T, r, x["impliedVolatility"], option_type), axis=1)
         df["abs_delta"] = df["delta"].abs()
-
-        df["prob_itm"] = df.apply(
-            lambda x: prob_itm(stock_price, x["strike"], T, r, x["impliedVolatility"], option_type),
-            axis=1
-        )
+        df["prob_itm"] = df.apply(lambda x: prob_itm(stock_price, x["strike"], T, r, x["impliedVolatility"], option_type), axis=1)
 
         df = df.replace([np.inf, -np.inf], np.nan)
         df = df.dropna(subset=["delta", "prob_itm"])
@@ -790,16 +902,11 @@ def build_options_table(
             return pd.DataFrame()
 
         df["option_quality_score"] = df.apply(
-            lambda row: option_quality_score(
-                row, min_delta, max_delta, min_volume, min_oi, max_spread_pct, max_cost
-            ),
+            lambda row: option_quality_score(row, min_delta, max_delta, min_volume, min_oi, max_spread_pct, max_cost),
             axis=1
         )
 
-        df["final_trade_score"] = (
-            0.60 * stock_setup_score +
-            0.40 * df["option_quality_score"]
-        ).round(0).astype(int)
+        df["final_trade_score"] = (0.60 * stock_setup_score + 0.40 * df["option_quality_score"]).round(0).astype(int)
 
         filtered = df[
             (df["abs_delta"].between(min_delta, max_delta)) &
@@ -828,35 +935,24 @@ def build_options_table(
 def decision_label(stock_score, option_score, final_score, earnings_risk, market_conflict):
     if earnings_risk == "High":
         return "DO NOT TRADE", "High earnings risk"
-
     if market_conflict:
         return "WATCHLIST", "Market trend conflicts with trade direction"
-
     if stock_score < 60 and option_score >= 60:
         return "WATCHLIST", "Good contract, weak stock setup"
-
     if stock_score >= 70 and option_score < 60:
         return "FIND BETTER CONTRACT", "Good setup, weak option contract"
-
     if final_score >= 75:
         return "TRADE CANDIDATE", "Setup and contract quality align"
-
     if final_score >= 60:
         return "WATCHLIST", "Needs more confirmation"
-
     return "AVOID", "Low combined score"
 
-
-# ============================================================
-# SPREAD STRATEGIES
-# ============================================================
 
 def spread_liquidity_ok(a, b, min_volume=10, min_oi=25, max_spread_pct=35):
     try:
         avg_volume = (float(a["volume"]) + float(b["volume"])) / 2
         avg_oi = (float(a["openInterest"]) + float(b["openInterest"])) / 2
         avg_spread = (float(a["spread_pct"]) + float(b["spread_pct"])) / 2
-
         return avg_volume >= min_volume and avg_oi >= min_oi and avg_spread <= max_spread_pct
     except Exception:
         return False
@@ -866,12 +962,7 @@ def spread_liquidity_score(a, b):
     avg_volume = (float(a["volume"]) + float(b["volume"])) / 2
     avg_oi = (float(a["openInterest"]) + float(b["openInterest"])) / 2
     avg_spread = (float(a["spread_pct"]) + float(b["spread_pct"])) / 2
-
-    volume_score = min(30, avg_volume / 5)
-    oi_score = min(30, avg_oi / 20)
-    spread_score = max(0, 40 - avg_spread)
-
-    return min(100, volume_score + oi_score + spread_score)
+    return min(100, min(30, avg_volume / 5) + min(30, avg_oi / 20) + max(0, 40 - avg_spread))
 
 
 def build_debit_call_spreads(calls, stock_price, exp, stock_score):
@@ -885,37 +976,26 @@ def build_debit_call_spreads(calls, stock_price, exp, stock_score):
 
     for i in range(len(df)):
         buy = df.iloc[i]
-
         for j in range(i + 1, min(i + 6, len(df))):
             sell = df.iloc[j]
-
             if not spread_liquidity_ok(buy, sell):
                 continue
 
             width = sell["strike"] - buy["strike"]
             debit = buy["ask"] - sell["bid"]
-
             if width <= 0 or debit <= 0:
                 continue
 
             max_profit = width - debit
             max_loss = debit
             breakeven = buy["strike"] + debit
-
             if max_profit <= 0 or max_loss <= 0:
                 continue
 
             rr = max_profit / max_loss
             prob_est = prob_above_price(stock_price, breakeven, T, 0.045, buy["impliedVolatility"]) * 100
             liquidity = spread_liquidity_score(buy, sell)
-
-            score = int(max(0, min(
-                100,
-                0.40 * stock_score +
-                0.25 * min(100, rr * 25) +
-                0.20 * liquidity +
-                0.15 * prob_est
-            )))
+            score = int(max(0, min(100, 0.40 * stock_score + 0.25 * min(100, rr * 25) + 0.20 * liquidity + 0.15 * prob_est)))
 
             rows.append({
                 "Strategy": "Debit Call Spread",
@@ -948,37 +1028,26 @@ def build_debit_put_spreads(puts, stock_price, exp, stock_score):
 
     for i in range(len(df)):
         buy = df.iloc[i]
-
         for j in range(i + 1, min(i + 6, len(df))):
             sell = df.iloc[j]
-
             if not spread_liquidity_ok(buy, sell):
                 continue
 
             width = buy["strike"] - sell["strike"]
             debit = buy["ask"] - sell["bid"]
-
             if width <= 0 or debit <= 0:
                 continue
 
             max_profit = width - debit
             max_loss = debit
             breakeven = buy["strike"] - debit
-
             if max_profit <= 0 or max_loss <= 0:
                 continue
 
             rr = max_profit / max_loss
             prob_est = prob_below_price(stock_price, breakeven, T, 0.045, buy["impliedVolatility"]) * 100
             liquidity = spread_liquidity_score(buy, sell)
-
-            score = int(max(0, min(
-                100,
-                0.40 * stock_score +
-                0.25 * min(100, rr * 25) +
-                0.20 * liquidity +
-                0.15 * prob_est
-            )))
+            score = int(max(0, min(100, 0.40 * stock_score + 0.25 * min(100, rr * 25) + 0.20 * liquidity + 0.15 * prob_est)))
 
             rows.append({
                 "Strategy": "Debit Put Spread",
@@ -1011,37 +1080,26 @@ def build_credit_put_spreads(puts, stock_price, exp, stock_score):
 
     for i in range(len(df)):
         sell = df.iloc[i]
-
         for j in range(i + 1, min(i + 6, len(df))):
             buy = df.iloc[j]
-
             if not spread_liquidity_ok(sell, buy):
                 continue
 
             width = sell["strike"] - buy["strike"]
             credit = sell["bid"] - buy["ask"]
-
             if width <= 0 or credit <= 0:
                 continue
 
             max_profit = credit
             max_loss = width - credit
             breakeven = sell["strike"] - credit
-
             if max_profit <= 0 or max_loss <= 0:
                 continue
 
             rr = max_profit / max_loss
             prob_est = prob_above_price(stock_price, breakeven, T, 0.045, sell["impliedVolatility"]) * 100
             liquidity = spread_liquidity_score(sell, buy)
-
-            score = int(max(0, min(
-                100,
-                0.35 * stock_score +
-                0.30 * prob_est +
-                0.20 * liquidity +
-                0.15 * min(100, rr * 100)
-            )))
+            score = int(max(0, min(100, 0.35 * stock_score + 0.30 * prob_est + 0.20 * liquidity + 0.15 * min(100, rr * 100))))
 
             rows.append({
                 "Strategy": "Credit Put Spread",
@@ -1074,37 +1132,26 @@ def build_credit_call_spreads(calls, stock_price, exp, stock_score):
 
     for i in range(len(df)):
         sell = df.iloc[i]
-
         for j in range(i + 1, min(i + 6, len(df))):
             buy = df.iloc[j]
-
             if not spread_liquidity_ok(sell, buy):
                 continue
 
             width = buy["strike"] - sell["strike"]
             credit = sell["bid"] - buy["ask"]
-
             if width <= 0 or credit <= 0:
                 continue
 
             max_profit = credit
             max_loss = width - credit
             breakeven = sell["strike"] + credit
-
             if max_profit <= 0 or max_loss <= 0:
                 continue
 
             rr = max_profit / max_loss
             prob_est = prob_below_price(stock_price, breakeven, T, 0.045, sell["impliedVolatility"]) * 100
             liquidity = spread_liquidity_score(sell, buy)
-
-            score = int(max(0, min(
-                100,
-                0.35 * stock_score +
-                0.30 * prob_est +
-                0.20 * liquidity +
-                0.15 * min(100, rr * 100)
-            )))
+            score = int(max(0, min(100, 0.35 * stock_score + 0.30 * prob_est + 0.20 * liquidity + 0.15 * min(100, rr * 100))))
 
             rows.append({
                 "Strategy": "Credit Call Spread",
@@ -1155,18 +1202,7 @@ def make_chart(df, setup, ticker):
         subplot_titles=("Price Action", "Volume", "RSI / MACD")
     )
 
-    fig.add_trace(
-        go.Candlestick(
-            x=df.index,
-            open=df["Open"],
-            high=df["High"],
-            low=df["Low"],
-            close=df["Close"],
-            name="Candles"
-        ),
-        row=1,
-        col=1
-    )
+    fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"], name="Candles"), row=1, col=1)
 
     for ema in ["EMA_9", "EMA_21", "EMA_50", "EMA_200"]:
         fig.add_trace(go.Scatter(x=df.index, y=df[ema], mode="lines", name=ema), row=1, col=1)
@@ -1175,40 +1211,22 @@ def make_chart(df, setup, ticker):
     fig.add_hline(y=setup["resistance"], line_dash="dash", annotation_text="Resistance", row=1, col=1)
 
     if not np.isnan(setup["entry_low"]) and not np.isnan(setup["entry_high"]):
-        fig.add_hrect(
-            y0=setup["entry_low"],
-            y1=setup["entry_high"],
-            opacity=0.18,
-            annotation_text="Entry Zone",
-            row=1,
-            col=1
-        )
+        fig.add_hrect(y0=setup["entry_low"], y1=setup["entry_high"], opacity=0.18, annotation_text="Entry Zone", row=1, col=1)
 
     if not np.isnan(setup["stop"]):
         fig.add_hline(y=setup["stop"], line_dash="dot", annotation_text="Stop", row=1, col=1)
-
     if not np.isnan(setup["target1"]):
         fig.add_hline(y=setup["target1"], line_dash="dot", annotation_text="Target 1", row=1, col=1)
-
     if not np.isnan(setup["target2"]):
         fig.add_hline(y=setup["target2"], line_dash="dot", annotation_text="Target 2", row=1, col=1)
 
     fig.add_trace(go.Bar(x=df.index, y=df["Volume"], name="Volume"), row=2, col=1)
     fig.add_trace(go.Scatter(x=df.index, y=df["RSI"], name="RSI"), row=3, col=1)
-
     fig.add_hline(y=70, line_dash="dash", row=3, col=1)
     fig.add_hline(y=30, line_dash="dash", row=3, col=1)
-
     fig.add_trace(go.Scatter(x=df.index, y=df["MACD_HIST"], name="MACD Hist"), row=3, col=1)
 
-    fig.update_layout(
-        title=ticker.upper(),
-        height=800,
-        xaxis_rangeslider_visible=False,
-        margin=dict(l=10, r=10, t=40, b=10),
-        legend=dict(orientation="h")
-    )
-
+    fig.update_layout(title=ticker.upper(), height=800, xaxis_rangeslider_visible=False, margin=dict(l=10, r=10, t=40, b=10), legend=dict(orientation="h"))
     return fig
 
 
@@ -1242,14 +1260,7 @@ def save_trade(trade):
 
 def calculate_trade_stats(df):
     if df.empty:
-        return {
-            "Total Trades": 0,
-            "Win Rate": 0,
-            "Total P&L": 0,
-            "Average Win": 0,
-            "Average Loss": 0,
-            "Average Return": 0,
-        }
+        return {"Total Trades": 0, "Win Rate": 0, "Total P&L": 0, "Average Win": 0, "Average Loss": 0, "Average Return": 0}
 
     df = df.copy()
     df["P&L"] = pd.to_numeric(df["P&L"], errors="coerce").fillna(0)
@@ -1302,7 +1313,6 @@ def run_scanner(inputs, period, interval):
 
             if setup["preferred_side"] == "call" and not market["call_ok"]:
                 adjusted -= 15
-
             if setup["preferred_side"] == "put" and not market["put_ok"]:
                 adjusted -= 15
 
@@ -1340,12 +1350,20 @@ def run_scanner(inputs, period, interval):
 # SIDEBAR
 # ============================================================
 
-st.sidebar.title("Terminal Controls")
+st.sidebar.title("TradeEdge Pro")
 
 mode = st.sidebar.radio(
-    "Mode",
-    ["Single Ticker", "Multi-Stock Scanner", "Trade Tracker"]
+    "Navigation",
+    ["📈 Trade Terminal", "🔎 Scanner", "📓 Trade Journal"]
 )
+
+mode_map = {
+    "📈 Trade Terminal": "Single Ticker",
+    "🔎 Scanner": "Multi-Stock Scanner",
+    "📓 Trade Journal": "Trade Tracker"
+}
+
+mode = mode_map[mode]
 
 ticker_input = st.sidebar.text_input("Ticker or Company Name", "Apple")
 ticker = resolve_ticker(ticker_input)
@@ -1353,22 +1371,12 @@ ticker = resolve_ticker(ticker_input)
 if ticker:
     st.sidebar.caption(f"Resolved ticker: {ticker}")
 
-period = st.sidebar.selectbox(
-    "Chart Period",
-    ["1mo", "3mo", "6mo", "1y", "2y"],
-    index=2
-)
-
-interval = st.sidebar.selectbox(
-    "Chart Interval",
-    ["1d", "1h", "30m", "15m"],
-    index=0
-)
+period = st.sidebar.selectbox("Chart Period", ["1mo", "3mo", "6mo", "1y", "2y"], index=2)
+interval = st.sidebar.selectbox("Chart Interval", ["1d", "1h", "30m", "15m"], index=0)
 
 if interval in ["15m", "30m"] and period != "1mo":
     st.sidebar.warning("15m/30m data works best with 1mo. Switching period to 1mo.")
     period = "1mo"
-
 elif interval == "1h" and period in ["1y", "2y"]:
     st.sidebar.warning("1h data works best with 6mo or less. Switching period to 6mo.")
     period = "6mo"
@@ -1401,12 +1409,9 @@ profit_target_pct = st.sidebar.slider("Option Profit Target %", 10, 200, 50, 5)
 # ============================================================
 
 if mode == "Trade Tracker":
-    st.subheader("Trade Tracker")
+    st.subheader("📓 Trade Journal")
 
-    st.info(
-        "On Streamlit Cloud, CSV storage may reset when the app restarts. "
-        "For permanent tracking, use Google Sheets or a database later."
-    )
+    st.info("On Streamlit Cloud, CSV storage may reset when the app restarts. For permanent tracking, use Google Sheets or a database later.")
 
     with st.form("trade_form"):
         col1, col2, col3 = st.columns(3)
@@ -1416,21 +1421,8 @@ if mode == "Trade Tracker":
             trade_ticker_input = st.text_input("Trade Ticker or Company Name", "Apple")
             trade_ticker = resolve_ticker(trade_ticker_input)
 
-            trade_type = st.selectbox(
-                "Trade Type",
-                ["Long Call / Long Put", "Debit Spread", "Credit Spread"]
-            )
-
-            signal = st.selectbox(
-                "Signal",
-                [
-                    "TRADE CANDIDATE",
-                    "WATCHLIST",
-                    "FIND BETTER CONTRACT",
-                    "AVOID",
-                    "MANUAL"
-                ]
-            )
+            trade_type = st.selectbox("Trade Type", ["Long Call / Long Put", "Debit Spread", "Credit Spread"])
+            signal = st.selectbox("Signal", ["TRADE CANDIDATE", "WATCHLIST", "FIND BETTER CONTRACT", "AVOID", "MANUAL"])
 
         with col2:
             contract = st.text_input("Contract / Spread Legs", "")
@@ -1450,11 +1442,10 @@ if mode == "Trade Tracker":
 
             if trade_type == "Credit Spread":
                 pnl = entry_value - exit_value
-                return_pct = (pnl / entry_value * 100) if entry_value > 0 else 0
             else:
                 pnl = exit_value - entry_value
-                return_pct = (pnl / entry_value * 100) if entry_value > 0 else 0
 
+            return_pct = (pnl / entry_value * 100) if entry_value > 0 else 0
             result = "WIN" if pnl > 0 else "LOSS" if pnl < 0 else "BREAKEVEN"
 
             save_trade({
@@ -1493,12 +1484,7 @@ if mode == "Trade Tracker":
         st.metric("Average Return", f"{stats['Average Return']:.1f}%")
         st.dataframe(trades, use_container_width=True, height=500)
 
-        st.download_button(
-            "Download Trade Journal CSV",
-            trades.to_csv(index=False),
-            file_name="trade_journal.csv",
-            mime="text/csv"
-        )
+        st.download_button("Download Trade Journal CSV", trades.to_csv(index=False), file_name="trade_journal.csv", mime="text/csv")
 
     st.stop()
 
@@ -1508,7 +1494,7 @@ if mode == "Trade Tracker":
 # ============================================================
 
 if mode == "Multi-Stock Scanner":
-    st.subheader("Multi-Stock Scanner")
+    st.subheader("🔎 Multi-Stock Scanner")
 
     default_list = "Apple, Microsoft, Nvidia, Tesla, Amazon, Meta, Google, AMD, Netflix, SPY, QQQ"
     tickers_text = st.text_area("Tickers or Company Names", default_list, height=110)
@@ -1563,7 +1549,7 @@ if setup is None:
 # DASHBOARD
 # ============================================================
 
-st.subheader("Trade Decision Dashboard")
+st.subheader("📈 Trade Decision Dashboard")
 
 top1, top2, top3, top4 = st.columns(4)
 with top1:
@@ -1574,8 +1560,6 @@ with top3:
     display_card("Price", f"${setup['price']:.2f}", font_size=32)
 with top4:
     display_card("Preferred Side", setup["preferred_side"].upper(), font_size=32)
-
-st.markdown("")
 
 m1, m2, m3, m4 = st.columns(4)
 with m1:
@@ -1677,11 +1661,7 @@ try:
 
     exp = st.selectbox("Expiration Date", expirations)
 
-    side = st.radio(
-        "Option Side",
-        ["call", "put"],
-        index=0 if setup["preferred_side"] == "call" else 1
-    )
+    side = st.radio("Option Side", ["call", "put"], index=0 if setup["preferred_side"] == "call" else 1)
 
     calls, puts = get_chain(ticker, exp)
     chain = calls if side == "call" else puts
@@ -1708,18 +1688,9 @@ try:
         option_score = int(best["option_quality_score"])
         final_score = int(best["final_trade_score"])
 
-        market_conflict = (
-            (side == "call" and not market["call_ok"]) or
-            (side == "put" and not market["put_ok"])
-        )
+        market_conflict = (side == "call" and not market["call_ok"]) or (side == "put" and not market["put_ok"])
 
-        decision, decision_reason = decision_label(
-            setup["stock_score"],
-            option_score,
-            final_score,
-            earnings_risk,
-            market_conflict
-        )
+        decision, decision_reason = decision_label(setup["stock_score"], option_score, final_score, earnings_risk, market_conflict)
 
         st.subheader("Final Trade Decision")
 
@@ -1840,16 +1811,7 @@ try:
         st.markdown("### Best Overall Spread")
         st.dataframe(pd.DataFrame([best_spread]), use_container_width=True)
 
-        strategy_filter = st.selectbox(
-            "View Spread Strategy",
-            [
-                "All Spreads",
-                "Debit Call Spread",
-                "Debit Put Spread",
-                "Credit Put Spread",
-                "Credit Call Spread"
-            ]
-        )
+        strategy_filter = st.selectbox("View Spread Strategy", ["All Spreads", "Debit Call Spread", "Debit Put Spread", "Credit Put Spread", "Credit Call Spread"])
 
         if strategy_filter == "All Spreads":
             spread_display = all_spreads
@@ -1888,33 +1850,12 @@ if news_df.empty:
     st.info("No recent news found.")
 else:
     for _, row in news_df.iterrows():
-        title = row.get("Title", "")
-        publisher = row.get("Publisher", "")
-        published = row.get("Published", "")
-        link = row.get("Link", "")
+        clickable_news_card(
+            title=row.get("Title", ""),
+            publisher=row.get("Publisher", ""),
+            published=row.get("Published", ""),
+            link=row.get("Link", "")
+        )
 
-        if link:
-            st.markdown(
-                f"""
-                <div style="
-                    border: 1px solid #e5e7eb;
-                    border-radius: 12px;
-                    padding: 14px;
-                    margin-bottom: 10px;
-                    background: white;
-                ">
-                    <div style="font-size: 18px; font-weight: 700;">
-                        <a href="{link}" target="_blank" style="text-decoration: none;">
-                            {title}
-                        </a>
-                    </div>
-                    <div style="font-size: 13px; color: #6b7280; margin-top: 6px;">
-                        {publisher} | {published}
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-        else:
-            st.write(f"**{title}**")
-            st.caption(f"{publisher} | {published}")
+st.markdown("---")
+st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} | Data source: yfinance")
