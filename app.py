@@ -1,7 +1,8 @@
-# Pro Options Trade App - Corrected Full Version With Options Spreads
-
 import os
 import math
+import json
+import urllib.parse
+import urllib.request
 from datetime import datetime, date
 
 import numpy as np
@@ -17,23 +18,116 @@ from ta.trend import MACD
 from ta.volatility import AverageTrueRange
 
 
-st.set_page_config(
-    page_title="Pro Options Trade App",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="Options Edge Terminal", layout="wide", initial_sidebar_state="expanded")
 
-st.title("Pro Options Trade Decision App")
+st.title("Options Edge Terminal")
 
 st.warning(
-    "Educational decision-support only. This app does not guarantee profit. "
-    "Use stops, position sizing, and discipline."
+    "Educational decision-support only. This does not guarantee winners. "
+    "Use position sizing, stops, and risk discipline."
 )
+
+
+# ============================================================
+# TICKER RESOLVER
+# ============================================================
+
+COMMON_TICKERS = {
+    "apple": "AAPL",
+    "microsoft": "MSFT",
+    "nvidia": "NVDA",
+    "tesla": "TSLA",
+    "amazon": "AMZN",
+    "meta": "META",
+    "facebook": "META",
+    "google": "GOOGL",
+    "alphabet": "GOOGL",
+    "netflix": "NFLX",
+    "amd": "AMD",
+    "spy": "SPY",
+    "qqq": "QQQ",
+    "palantir": "PLTR",
+    "sofi": "SOFI",
+    "robinhood": "HOOD",
+    "coinbase": "COIN",
+    "ford": "F",
+    "disney": "DIS",
+    "walmart": "WMT",
+    "costco": "COST",
+    "target": "TGT",
+    "boeing": "BA",
+    "coca cola": "KO",
+    "coke": "KO",
+    "pepsi": "PEP",
+    "jpmorgan": "JPM",
+    "jp morgan": "JPM",
+    "bank of america": "BAC",
+    "nike": "NKE",
+    "starbucks": "SBUX",
+    "mcdonalds": "MCD",
+    "chipotle": "CMG",
+    "paypal": "PYPL",
+    "salesforce": "CRM",
+    "oracle": "ORCL",
+    "intel": "INTC",
+    "micron": "MU",
+    "qualcomm": "QCOM",
+    "uber": "UBER",
+    "lyft": "LYFT",
+    "airbnb": "ABNB",
+    "snowflake": "SNOW",
+    "shopify": "SHOP",
+    "draftkings": "DKNG",
+}
+
+
+@st.cache_data(ttl=3600)
+def resolve_ticker(user_input):
+    raw = str(user_input).strip()
+    key = raw.lower()
+
+    if not raw:
+        return ""
+
+    if key in COMMON_TICKERS:
+        return COMMON_TICKERS[key]
+
+    if raw.isalpha() and len(raw) <= 5:
+        return raw.upper()
+
+    try:
+        query = urllib.parse.quote(raw)
+        url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}&quotesCount=5&newsCount=0"
+
+        with urllib.request.urlopen(url, timeout=5) as response:
+            data = json.loads(response.read().decode())
+
+        quotes = data.get("quotes", [])
+
+        for q in quotes:
+            symbol = q.get("symbol", "")
+            quote_type = q.get("quoteType", "")
+            exchange = q.get("exchange", "")
+
+            if symbol and quote_type in ["EQUITY", "ETF"] and exchange in ["NMS", "NYQ", "ASE", "PCX"]:
+                return symbol.upper()
+
+    except Exception:
+        pass
+
+    return raw.upper()
 
 
 # ============================================================
 # MATH
 # ============================================================
+
+def dte(expiration):
+    try:
+        return max((datetime.strptime(expiration, "%Y-%m-%d").date() - date.today()).days, 0)
+    except Exception:
+        return 0
+
 
 def bs_delta(S, K, T, r, sigma, option_type):
     try:
@@ -73,13 +167,6 @@ def prob_below_price(S, target_price, T, r, sigma):
     return prob_itm(S, target_price, T, r, sigma, "put")
 
 
-def dte(exp):
-    try:
-        return max((datetime.strptime(exp, "%Y-%m-%d").date() - date.today()).days, 0)
-    except Exception:
-        return 0
-
-
 # ============================================================
 # DATA
 # ============================================================
@@ -117,9 +204,9 @@ def get_expirations(ticker):
 
 
 @st.cache_data(ttl=60)
-def get_chain(ticker, exp):
+def get_chain(ticker, expiration):
     try:
-        chain = yf.Ticker(ticker).option_chain(exp)
+        chain = yf.Ticker(ticker).option_chain(expiration)
         return chain.calls.copy(), chain.puts.copy()
     except Exception:
         return pd.DataFrame(), pd.DataFrame()
@@ -201,6 +288,7 @@ def get_earnings_warning(ticker):
                 if isinstance(raw, (list, tuple, np.ndarray)) and len(raw) > 0:
                     raw = raw[0]
                 earnings_date = pd.to_datetime(raw).date()
+
             elif "Earnings Date" in cal.columns and not cal.empty:
                 raw = cal["Earnings Date"].iloc[0]
                 if isinstance(raw, (list, tuple, np.ndarray)) and len(raw) > 0:
@@ -214,8 +302,10 @@ def get_earnings_warning(ticker):
 
         if 0 <= days <= 3:
             return "High", earnings_date, days
+
         if 4 <= days <= 10:
             return "Medium", earnings_date, days
+
         if days > 10:
             return "Low", earnings_date, days
 
@@ -225,38 +315,55 @@ def get_earnings_warning(ticker):
         return "Unknown", None, 0
 
 
+# ============================================================
+# INDICATORS
+# ============================================================
+
 def add_indicators(df):
     try:
-        out = df.copy()
+        data = df.copy()
 
-        if out.empty or len(out) < 30:
+        if data.empty or len(data) < 35:
             return pd.DataFrame()
 
-        out["RSI"] = RSIIndicator(out["Close"], window=14).rsi()
+        close = data["Close"]
+        high = data["High"]
+        low = data["Low"]
+        volume = data["Volume"]
 
-        macd = MACD(out["Close"])
-        out["MACD"] = macd.macd()
-        out["MACD_SIGNAL"] = macd.macd_signal()
-        out["MACD_HIST"] = macd.macd_diff()
+        data["RSI"] = RSIIndicator(close=close, window=14).rsi()
 
-        out["EMA9"] = out["Close"].ewm(span=9, adjust=False).mean()
-        out["EMA21"] = out["Close"].ewm(span=21, adjust=False).mean()
-        out["EMA50"] = out["Close"].ewm(span=50, adjust=False).mean()
-        out["EMA200"] = out["Close"].ewm(span=200, adjust=False).mean()
+        macd = MACD(close=close)
+        data["MACD"] = macd.macd()
+        data["MACD_SIGNAL"] = macd.macd_signal()
+        data["MACD_HIST"] = macd.macd_diff()
 
-        atr = AverageTrueRange(out["High"], out["Low"], out["Close"], window=14)
-        out["ATR"] = atr.average_true_range()
+        data["EMA_9"] = data["Close"].ewm(span=9, adjust=False).mean()
+        data["EMA_21"] = data["Close"].ewm(span=21, adjust=False).mean()
+        data["EMA_50"] = data["Close"].ewm(span=50, adjust=False).mean()
+        data["EMA_200"] = data["Close"].ewm(span=200, adjust=False).mean()
 
-        out["VOL_AVG"] = out["Volume"].rolling(20).mean()
-        out["VOL_RATIO"] = out["Volume"] / out["VOL_AVG"]
+        atr = AverageTrueRange(high=high, low=low, close=close, window=14)
+        data["ATR"] = atr.average_true_range()
 
-        out["RET"] = out["Close"].pct_change()
-        out["REALIZED_VOL"] = out["RET"].rolling(20).std() * np.sqrt(252)
+        data["VOL_AVG"] = volume.rolling(20).mean()
+        data["VOL_RATIO"] = volume / data["VOL_AVG"]
 
-        out = out.replace([np.inf, -np.inf], np.nan)
-        out = out.dropna()
+        data["RET"] = data["Close"].pct_change()
+        data["REALIZED_VOL"] = data["RET"].rolling(20).std() * np.sqrt(252)
 
-        return out
+        data = data.replace([np.inf, -np.inf], np.nan)
+
+        required_cols = [
+            "Close", "Open", "High", "Low", "Volume",
+            "RSI", "MACD", "MACD_SIGNAL", "MACD_HIST",
+            "EMA_9", "EMA_21", "EMA_50", "EMA_200",
+            "ATR", "VOL_RATIO"
+        ]
+
+        data = data.dropna(subset=required_cols)
+
+        return data
 
     except Exception:
         return pd.DataFrame()
@@ -290,8 +397,10 @@ def score_news_sentiment(news_df):
 
     for title in news_df["Title"].fillna("").head(10):
         text = str(title).lower()
+
         pos_hits = [w for w in POSITIVE_WORDS if w in text]
         neg_hits = [w for w in NEGATIVE_WORDS if w in text]
+
         score += 10 * len(pos_hits)
         score -= 10 * len(neg_hits)
 
@@ -329,11 +438,11 @@ def market_filter():
         spy_last = spy.iloc[-1]
         qqq_last = qqq.iloc[-1]
 
-        spy_bull = spy_last["Close"] > spy_last["EMA21"] > spy_last["EMA50"]
-        qqq_bull = qqq_last["Close"] > qqq_last["EMA21"] > qqq_last["EMA50"]
+        spy_bull = spy_last["Close"] > spy_last["EMA_21"] > spy_last["EMA_50"]
+        qqq_bull = qqq_last["Close"] > qqq_last["EMA_21"] > qqq_last["EMA_50"]
 
-        spy_bear = spy_last["Close"] < spy_last["EMA21"] < spy_last["EMA50"]
-        qqq_bear = qqq_last["Close"] < qqq_last["EMA21"] < qqq_last["EMA50"]
+        spy_bear = spy_last["Close"] < spy_last["EMA_21"] < spy_last["EMA_50"]
+        qqq_bear = qqq_last["Close"] < qqq_last["EMA_21"] < qqq_last["EMA_50"]
 
         vix_value = np.nan
         if not vix.empty:
@@ -374,7 +483,7 @@ def market_filter():
 
 
 # ============================================================
-# SETUP SCORING
+# STOCK SETUP SCORING
 # ============================================================
 
 def support_resistance(df, lookback=60):
@@ -382,7 +491,7 @@ def support_resistance(df, lookback=60):
     return float(recent["Low"].min()), float(recent["High"].max())
 
 
-def score_setup(df):
+def score_stock_setup(df, news_score=0, earnings_risk="Unknown"):
     try:
         if df is None or df.empty or len(df) < 2:
             return None
@@ -401,19 +510,19 @@ def score_setup(df):
         call_reasons = []
         put_reasons = []
 
-        if price > row["EMA21"] > row["EMA50"]:
+        if price > row["EMA_21"] > row["EMA_50"]:
             call_score += 25
             call_reasons.append("Bullish trend: price above EMA21 and EMA50")
 
-        if price > row["EMA200"]:
+        if price > row["EMA_200"]:
             call_score += 10
             call_reasons.append("Price above EMA200")
 
-        if price < row["EMA21"] < row["EMA50"]:
+        if price < row["EMA_21"] < row["EMA_50"]:
             put_score += 25
             put_reasons.append("Bearish trend: price below EMA21 and EMA50")
 
-        if price < row["EMA200"]:
+        if price < row["EMA_200"]:
             put_score += 10
             put_reasons.append("Price below EMA200")
 
@@ -465,7 +574,19 @@ def score_setup(df):
                 put_score += 15
                 put_reasons.append("Near resistance")
 
-        if price > 0 and abs(row["EMA21"] - row["EMA50"]) / price < 0.005:
+        if news_score >= 30:
+            call_score += 8
+            call_reasons.append("Positive news sentiment")
+
+        if news_score <= -30:
+            put_score += 8
+            put_reasons.append("Negative news sentiment")
+
+        if earnings_risk == "High":
+            call_score -= 15
+            put_score -= 15
+
+        if price > 0 and abs(row["EMA_21"] - row["EMA_50"]) / price < 0.005:
             call_score -= 8
             put_score -= 8
 
@@ -473,23 +594,33 @@ def score_setup(df):
         put_score = int(max(0, min(100, put_score)))
 
         if call_score >= 75 and call_score > put_score:
-            signal = "STRONG BUY CALL"
+            signal = "STRONG CALL SETUP"
+            preferred_side = "call"
+            stock_score = call_score
         elif put_score >= 75 and put_score > call_score:
-            signal = "STRONG BUY PUT"
+            signal = "STRONG PUT SETUP"
+            preferred_side = "put"
+            stock_score = put_score
         elif call_score >= 60 and call_score > put_score:
             signal = "CALL WATCHLIST"
+            preferred_side = "call"
+            stock_score = call_score
         elif put_score >= 60 and put_score > call_score:
             signal = "PUT WATCHLIST"
+            preferred_side = "put"
+            stock_score = put_score
         else:
             signal = "NO TRADE / WAIT"
+            preferred_side = "call" if call_score >= put_score else "put"
+            stock_score = max(call_score, put_score)
 
-        if "CALL" in signal and atr > 0:
+        if preferred_side == "call" and atr > 0:
             entry_low = price - 0.75 * atr
             entry_high = price + 0.25 * atr
             stop = price - 1.25 * atr
             target1 = price + 1.5 * atr
             target2 = price + 2.5 * atr
-        elif "PUT" in signal and atr > 0:
+        elif preferred_side == "put" and atr > 0:
             entry_low = price - 0.25 * atr
             entry_high = price + 0.75 * atr
             stop = price + 1.25 * atr
@@ -511,6 +642,8 @@ def score_setup(df):
             "vol_ratio": vol_ratio,
             "call_score": call_score,
             "put_score": put_score,
+            "stock_score": stock_score,
+            "preferred_side": preferred_side,
             "signal": signal,
             "entry_low": entry_low,
             "entry_high": entry_high,
@@ -526,7 +659,7 @@ def score_setup(df):
 
 
 # ============================================================
-# OPTIONS HELPERS
+# OPTION QUALITY
 # ============================================================
 
 def prepare_chain(chain):
@@ -535,7 +668,10 @@ def prepare_chain(chain):
 
     df = chain.copy()
 
-    for col in ["bid", "ask", "lastPrice", "strike", "volume", "openInterest", "impliedVolatility", "contractSymbol"]:
+    for col in [
+        "bid", "ask", "lastPrice", "strike", "volume",
+        "openInterest", "impliedVolatility", "contractSymbol"
+    ]:
         if col not in df.columns:
             df[col] = np.nan
 
@@ -555,11 +691,33 @@ def prepare_chain(chain):
     df["mid"] = (df["bid"] + df["ask"]) / 2
     df["spread"] = df["ask"] - df["bid"]
     df["spread_pct"] = np.where(df["mid"] > 0, df["spread"] / df["mid"] * 100, np.nan)
-
     df["cost_mid"] = df["mid"] * 100
     df["cost_ask"] = df["ask"] * 100
 
     return df.replace([np.inf, -np.inf], np.nan).dropna(subset=["mid", "spread_pct", "cost_ask"])
+
+
+def option_quality_score(row, min_delta, max_delta, min_volume, min_oi, max_spread_pct, max_cost):
+    score = 0
+
+    abs_delta = abs(row.get("delta", np.nan))
+
+    if min_delta <= abs_delta <= max_delta:
+        score += 25
+
+    if row.get("spread_pct", 999) <= max_spread_pct:
+        score += 25
+
+    if row.get("volume", 0) >= min_volume:
+        score += 20
+
+    if row.get("openInterest", 0) >= min_oi:
+        score += 20
+
+    if row.get("cost_ask", 999999) <= max_cost:
+        score += 10
+
+    return int(max(0, min(100, score)))
 
 
 def build_options_table(
@@ -567,7 +725,7 @@ def build_options_table(
     option_type,
     stock_price,
     exp,
-    setup_score,
+    stock_setup_score,
     min_delta,
     max_delta,
     min_volume,
@@ -602,20 +760,23 @@ def build_options_table(
         if df.empty:
             return pd.DataFrame()
 
-        df["liquidity_score"] = 0
-        df.loc[df["volume"] >= min_volume, "liquidity_score"] += 20
-        df.loc[df["openInterest"] >= min_oi, "liquidity_score"] += 20
-        df.loc[df["spread_pct"].fillna(999) <= max_spread_pct, "liquidity_score"] += 20
-        df.loc[df["abs_delta"].between(min_delta, max_delta), "liquidity_score"] += 20
-        df.loc[df["cost_ask"].fillna(999999) <= max_cost, "liquidity_score"] += 20
+        df["option_quality_score"] = df.apply(
+            lambda row: option_quality_score(
+                row, min_delta, max_delta, min_volume, min_oi, max_spread_pct, max_cost
+            ),
+            axis=1
+        )
 
-        df["trade_score"] = (0.55 * setup_score + 0.45 * df["liquidity_score"]).round(0).astype(int)
+        df["final_trade_score"] = (
+            0.60 * stock_setup_score +
+            0.40 * df["option_quality_score"]
+        ).round(0).astype(int)
 
         filtered = df[
             (df["abs_delta"].between(min_delta, max_delta)) &
+            (df["spread_pct"].fillna(999) <= max_spread_pct) &
             (df["volume"] >= min_volume) &
             (df["openInterest"] >= min_oi) &
-            (df["spread_pct"].fillna(999) <= max_spread_pct) &
             (df["cost_ask"].fillna(999999) <= max_cost)
         ].copy()
 
@@ -625,17 +786,40 @@ def build_options_table(
         cols = [
             "contractSymbol", "strike", "lastPrice", "bid", "ask", "mid",
             "cost_mid", "cost_ask", "spread_pct", "volume", "openInterest",
-            "impliedVolatility", "delta", "prob_itm", "trade_score"
+            "impliedVolatility", "delta", "prob_itm",
+            "option_quality_score", "final_trade_score"
         ]
 
-        return filtered[cols].sort_values("trade_score", ascending=False)
+        return filtered[cols].sort_values("final_trade_score", ascending=False)
 
     except Exception:
         return pd.DataFrame()
 
 
+def decision_label(stock_score, option_score, final_score, earnings_risk, market_conflict):
+    if earnings_risk == "High":
+        return "DO NOT TRADE", "High earnings risk"
+
+    if market_conflict:
+        return "WATCHLIST", "Market trend conflicts with trade direction"
+
+    if stock_score < 60 and option_score >= 60:
+        return "WATCHLIST", "Good contract, weak stock setup"
+
+    if stock_score >= 70 and option_score < 60:
+        return "FIND BETTER CONTRACT", "Good setup, weak option contract"
+
+    if final_score >= 75:
+        return "TRADE CANDIDATE", "Setup and contract quality align"
+
+    if final_score >= 60:
+        return "WATCHLIST", "Needs more confirmation"
+
+    return "AVOID", "Low combined score"
+
+
 # ============================================================
-# OPTIONS SPREAD STRATEGIES
+# SPREAD STRATEGIES
 # ============================================================
 
 def spread_liquidity_ok(a, b, min_volume=10, min_oi=25, max_spread_pct=35):
@@ -644,11 +828,7 @@ def spread_liquidity_ok(a, b, min_volume=10, min_oi=25, max_spread_pct=35):
         avg_oi = (float(a["openInterest"]) + float(b["openInterest"])) / 2
         avg_spread = (float(a["spread_pct"]) + float(b["spread_pct"])) / 2
 
-        return (
-            avg_volume >= min_volume and
-            avg_oi >= min_oi and
-            avg_spread <= max_spread_pct
-        )
+        return avg_volume >= min_volume and avg_oi >= min_oi and avg_spread <= max_spread_pct
     except Exception:
         return False
 
@@ -665,7 +845,7 @@ def spread_liquidity_score(a, b):
     return min(100, volume_score + oi_score + spread_score)
 
 
-def build_debit_call_spreads(calls, stock_price, exp, setup_score):
+def build_debit_call_spreads(calls, stock_price, exp, stock_score):
     df = prepare_chain(calls)
     if df.empty:
         return pd.DataFrame()
@@ -702,7 +882,7 @@ def build_debit_call_spreads(calls, stock_price, exp, setup_score):
 
             score = int(max(0, min(
                 100,
-                0.40 * setup_score +
+                0.40 * stock_score +
                 0.25 * min(100, rr * 25) +
                 0.20 * liquidity +
                 0.15 * prob_est
@@ -728,7 +908,7 @@ def build_debit_call_spreads(calls, stock_price, exp, setup_score):
     return pd.DataFrame(rows).sort_values("Spread Score", ascending=False) if rows else pd.DataFrame()
 
 
-def build_debit_put_spreads(puts, stock_price, exp, setup_score):
+def build_debit_put_spreads(puts, stock_price, exp, stock_score):
     df = prepare_chain(puts)
     if df.empty:
         return pd.DataFrame()
@@ -765,7 +945,7 @@ def build_debit_put_spreads(puts, stock_price, exp, setup_score):
 
             score = int(max(0, min(
                 100,
-                0.40 * setup_score +
+                0.40 * stock_score +
                 0.25 * min(100, rr * 25) +
                 0.20 * liquidity +
                 0.15 * prob_est
@@ -791,7 +971,7 @@ def build_debit_put_spreads(puts, stock_price, exp, setup_score):
     return pd.DataFrame(rows).sort_values("Spread Score", ascending=False) if rows else pd.DataFrame()
 
 
-def build_credit_put_spreads(puts, stock_price, exp, setup_score):
+def build_credit_put_spreads(puts, stock_price, exp, stock_score):
     df = prepare_chain(puts)
     if df.empty:
         return pd.DataFrame()
@@ -828,7 +1008,7 @@ def build_credit_put_spreads(puts, stock_price, exp, setup_score):
 
             score = int(max(0, min(
                 100,
-                0.35 * setup_score +
+                0.35 * stock_score +
                 0.30 * prob_est +
                 0.20 * liquidity +
                 0.15 * min(100, rr * 100)
@@ -854,7 +1034,7 @@ def build_credit_put_spreads(puts, stock_price, exp, setup_score):
     return pd.DataFrame(rows).sort_values("Spread Score", ascending=False) if rows else pd.DataFrame()
 
 
-def build_credit_call_spreads(calls, stock_price, exp, setup_score):
+def build_credit_call_spreads(calls, stock_price, exp, stock_score):
     df = prepare_chain(calls)
     if df.empty:
         return pd.DataFrame()
@@ -891,7 +1071,7 @@ def build_credit_call_spreads(calls, stock_price, exp, setup_score):
 
             score = int(max(0, min(
                 100,
-                0.35 * setup_score +
+                0.35 * stock_score +
                 0.30 * prob_est +
                 0.20 * liquidity +
                 0.15 * min(100, rr * 100)
@@ -933,75 +1113,6 @@ def build_all_spreads(calls, puts, stock_price, exp, call_score, put_score):
 
 
 # ============================================================
-# CONFIDENCE
-# ============================================================
-
-def final_confidence(setup, option_row, side, news_score, earnings_risk, market):
-    technical_score = setup["call_score"] if side == "call" else setup["put_score"]
-    option_score = option_row["trade_score"] if option_row is not None else 0
-    news_component = (news_score + 100) / 2
-
-    final = 0.50 * technical_score + 0.30 * option_score + 0.20 * news_component
-
-    penalties = []
-    do_not_trade = False
-
-    if setup["signal"] == "NO TRADE / WAIT":
-        final -= 20
-        penalties.append("Stock setup says WAIT")
-        do_not_trade = True
-
-    if side == "call" and not market["call_ok"]:
-        final -= 15
-        penalties.append("Market trend does not favor calls")
-
-    if side == "put" and not market["put_ok"]:
-        final -= 15
-        penalties.append("Market trend does not favor puts")
-
-    if earnings_risk == "High":
-        final -= 25
-        penalties.append("Earnings risk is high")
-        do_not_trade = True
-    elif earnings_risk == "Medium":
-        final -= 10
-        penalties.append("Earnings risk is medium")
-
-    if option_row is not None:
-        if option_row["spread_pct"] > 20:
-            final -= 20
-            penalties.append("Spread is too wide")
-            do_not_trade = True
-
-        if option_row["volume"] < 20:
-            final -= 10
-            penalties.append("Low option volume")
-
-        if option_row["openInterest"] < 50:
-            final -= 10
-            penalties.append("Low open interest")
-
-        if option_row["impliedVolatility"] > 0.90:
-            final -= 15
-            penalties.append("Very high IV / expensive option")
-
-    final = int(max(0, min(100, final)))
-
-    if do_not_trade:
-        label = "DO NOT TRADE"
-    elif final >= 80:
-        label = "A+ SETUP"
-    elif final >= 70:
-        label = "HIGH CONFIDENCE"
-    elif final >= 60:
-        label = "WATCHLIST"
-    else:
-        label = "LOW CONFIDENCE / WAIT"
-
-    return final, label, penalties
-
-
-# ============================================================
 # CHART
 # ============================================================
 
@@ -1028,7 +1139,7 @@ def make_chart(df, setup, ticker):
         col=1
     )
 
-    for ema in ["EMA9", "EMA21", "EMA50", "EMA200"]:
+    for ema in ["EMA_9", "EMA_21", "EMA_50", "EMA_200"]:
         fig.add_trace(go.Scatter(x=df.index, y=df[ema], mode="lines", name=ema), row=1, col=1)
 
     fig.add_hline(y=setup["support"], line_dash="dash", annotation_text="Support", row=1, col=1)
@@ -1070,79 +1181,6 @@ def make_chart(df, setup, ticker):
     )
 
     return fig
-
-
-# ============================================================
-# SCANNER
-# ============================================================
-
-def run_scanner(tickers, period, interval):
-    rows = []
-    market = market_filter()
-
-    for t in tickers:
-        t = t.strip().upper()
-
-        if not t:
-            continue
-
-        try:
-            df = add_indicators(get_price_data(t, period, interval))
-
-            if df.empty or len(df) < 2:
-                continue
-
-            setup = score_setup(df)
-
-            if setup is None:
-                continue
-
-            news_df = get_news(t)
-            news_score, news_label = score_news_sentiment(news_df)
-            earnings_risk, earnings_date, earnings_days = get_earnings_warning(t)
-
-            base_best = max(setup["call_score"], setup["put_score"])
-            adjusted = base_best + (news_score * 0.20)
-
-            if earnings_risk == "High":
-                adjusted -= 25
-
-            if "CALL" in setup["signal"] and not market["call_ok"]:
-                adjusted -= 15
-
-            if "PUT" in setup["signal"] and not market["put_ok"]:
-                adjusted -= 15
-
-            adjusted = int(max(0, min(100, adjusted)))
-
-            rows.append({
-                "Ticker": t,
-                "Price": round(setup["price"], 2),
-                "Signal": setup["signal"],
-                "Call Score": setup["call_score"],
-                "Put Score": setup["put_score"],
-                "News": news_label,
-                "News Score": news_score,
-                "Earnings Risk": earnings_risk,
-                "Market Bias": market["bias"],
-                "Adjusted Score": adjusted,
-                "RSI": round(setup["rsi"], 1),
-                "Support": round(setup["support"], 2),
-                "Resistance": round(setup["resistance"], 2),
-                "Entry Low": None if np.isnan(setup["entry_low"]) else round(setup["entry_low"], 2),
-                "Entry High": None if np.isnan(setup["entry_high"]) else round(setup["entry_high"], 2),
-                "Stop": None if np.isnan(setup["stop"]) else round(setup["stop"], 2),
-                "Target 1": None if np.isnan(setup["target1"]) else round(setup["target1"], 2),
-                "Target 2": None if np.isnan(setup["target2"]) else round(setup["target2"], 2),
-            })
-
-        except Exception:
-            continue
-
-    if not rows:
-        return pd.DataFrame()
-
-    return pd.DataFrame(rows).sort_values("Adjusted Score", ascending=False)
 
 
 # ============================================================
@@ -1203,17 +1241,88 @@ def calculate_trade_stats(df):
 
 
 # ============================================================
+# SCANNER
+# ============================================================
+
+def run_scanner(inputs, period, interval):
+    rows = []
+    market = market_filter()
+
+    for raw_input in inputs:
+        ticker = resolve_ticker(raw_input)
+
+        if not ticker:
+            continue
+
+        try:
+            df = add_indicators(get_price_data(ticker, period, interval))
+
+            if df.empty or len(df) < 2:
+                continue
+
+            news_df = get_news(ticker)
+            news_score, news_label = score_news_sentiment(news_df)
+            earnings_risk, _, _ = get_earnings_warning(ticker)
+
+            setup = score_stock_setup(df, news_score, earnings_risk)
+
+            if setup is None:
+                continue
+
+            adjusted = setup["stock_score"]
+
+            if setup["preferred_side"] == "call" and not market["call_ok"]:
+                adjusted -= 15
+
+            if setup["preferred_side"] == "put" and not market["put_ok"]:
+                adjusted -= 15
+
+            adjusted = int(max(0, min(100, adjusted)))
+
+            rows.append({
+                "Input": raw_input,
+                "Ticker": ticker,
+                "Price": round(setup["price"], 2),
+                "Decision": setup["signal"],
+                "Preferred Side": setup["preferred_side"].upper(),
+                "Stock Setup Score": setup["stock_score"],
+                "Call Score": setup["call_score"],
+                "Put Score": setup["put_score"],
+                "News": news_label,
+                "News Score": news_score,
+                "Earnings Risk": earnings_risk,
+                "Market Bias": market["bias"],
+                "Adjusted Setup Score": adjusted,
+                "RSI": round(setup["rsi"], 1),
+                "Support": round(setup["support"], 2),
+                "Resistance": round(setup["resistance"], 2),
+            })
+
+        except Exception:
+            continue
+
+    if not rows:
+        return pd.DataFrame()
+
+    return pd.DataFrame(rows).sort_values("Adjusted Setup Score", ascending=False)
+
+
+# ============================================================
 # SIDEBAR
 # ============================================================
 
-st.sidebar.title("Controls")
+st.sidebar.title("Terminal Controls")
 
 mode = st.sidebar.radio(
     "Mode",
     ["Single Ticker", "Multi-Stock Scanner", "Trade Tracker"]
 )
 
-ticker = st.sidebar.text_input("Ticker", "MSFT").upper().strip()
+ticker_input = st.sidebar.text_input("Ticker or Company Name", "Apple")
+ticker = resolve_ticker(ticker_input)
+
+if ticker:
+    st.sidebar.caption(f"Resolved ticker: {ticker}")
 
 period = st.sidebar.selectbox(
     "Chart Period",
@@ -1236,7 +1345,7 @@ elif interval == "1h" and period in ["1y", "2y"]:
     period = "6mo"
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("Options Filters")
+st.sidebar.subheader("Option Quality Filters")
 
 min_delta = st.sidebar.slider("Min Delta", 0.05, 0.95, 0.30, 0.05)
 max_delta = st.sidebar.slider("Max Delta", 0.05, 0.95, 0.60, 0.05)
@@ -1247,7 +1356,7 @@ if min_delta > max_delta:
 
 min_volume = st.sidebar.number_input("Min Option Volume", min_value=0, value=50, step=10)
 min_oi = st.sidebar.number_input("Min Open Interest", min_value=0, value=100, step=25)
-max_spread_pct = st.sidebar.slider("Max Spread %", 1.0, 50.0, 15.0, 1.0)
+max_spread_pct = st.sidebar.slider("Max Bid/Ask Spread %", 1.0, 50.0, 15.0, 1.0)
 max_cost = st.sidebar.number_input("Max Contract Cost", min_value=1, value=1500, step=50)
 
 st.sidebar.markdown("---")
@@ -1266,7 +1375,7 @@ if mode == "Trade Tracker":
     st.subheader("Trade Tracker")
 
     st.info(
-        "Note: on Streamlit Cloud, CSV storage may reset when the app restarts. "
+        "On Streamlit Cloud, CSV storage may reset when the app restarts. "
         "For permanent tracking, use Google Sheets or a database later."
     )
 
@@ -1275,26 +1384,22 @@ if mode == "Trade Tracker":
 
         with col1:
             trade_date = st.date_input("Trade Date", value=date.today())
-            trade_ticker = st.text_input("Trade Ticker", "MSFT").upper()
+            trade_ticker_input = st.text_input("Trade Ticker or Company Name", "Apple")
+            trade_ticker = resolve_ticker(trade_ticker_input)
 
             trade_type = st.selectbox(
                 "Trade Type",
-                [
-                    "Long Call / Long Put",
-                    "Debit Spread",
-                    "Credit Spread"
-                ]
+                ["Long Call / Long Put", "Debit Spread", "Credit Spread"]
             )
 
             signal = st.selectbox(
                 "Signal",
                 [
-                    "STRONG BUY CALL",
-                    "CALL WATCHLIST",
-                    "STRONG BUY PUT",
-                    "PUT WATCHLIST",
-                    "SPREAD STRATEGY",
-                    "NO TRADE / MANUAL"
+                    "TRADE CANDIDATE",
+                    "WATCHLIST",
+                    "FIND BETTER CONTRACT",
+                    "AVOID",
+                    "MANUAL"
                 ]
             )
 
@@ -1305,6 +1410,7 @@ if mode == "Trade Tracker":
             contracts = st.number_input("Number of Contracts", min_value=1, value=1, step=1)
 
         with col3:
+            st.caption(f"Resolved trade ticker: {trade_ticker}")
             notes = st.text_area("Notes", "")
 
         submitted = st.form_submit_button("Save Trade")
@@ -1375,14 +1481,14 @@ if mode == "Trade Tracker":
 if mode == "Multi-Stock Scanner":
     st.subheader("Multi-Stock Scanner")
 
-    default_list = "AAPL, MSFT, NVDA, TSLA, AMZN, META, GOOGL, AMD, NFLX, SPY, QQQ"
-    tickers_text = st.text_area("Tickers", default_list, height=110)
+    default_list = "Apple, Microsoft, Nvidia, Tesla, Amazon, Meta, Google, AMD, Netflix, SPY, QQQ"
+    tickers_text = st.text_area("Tickers or Company Names", default_list, height=110)
 
     if st.button("Run Scanner"):
-        tickers = [x.strip().upper() for x in tickers_text.split(",") if x.strip()]
+        inputs = [x.strip() for x in tickers_text.split(",") if x.strip()]
 
-        with st.spinner("Scanning stocks with market/news/earnings filters..."):
-            scan = run_scanner(tickers, period, interval)
+        with st.spinner("Scanning stocks..."):
+            scan = run_scanner(inputs, period, interval)
 
         if scan.empty:
             st.warning("No scanner results found. Try 6mo/1d or 1y/1d.")
@@ -1397,19 +1503,19 @@ if mode == "Multi-Stock Scanner":
 # ============================================================
 
 if not ticker:
-    st.warning("Enter a ticker.")
+    st.warning("Enter a ticker or company name.")
     st.stop()
 
-df = add_indicators(get_price_data(ticker, period, interval))
+raw_df = get_price_data(ticker, period, interval)
+
+if raw_df.empty:
+    st.error(f"No price data returned for {ticker}. Try a different ticker or company name.")
+    st.stop()
+
+df = add_indicators(raw_df)
 
 if df.empty or len(df) < 2:
-    st.error("Not enough usable data. Try 6mo or 1y with 1d interval.")
-    st.stop()
-
-setup = score_setup(df)
-
-if setup is None:
-    st.error("Not enough data to generate a signal.")
+    st.error("Not enough usable data after indicators. Try 1y/1d or another ticker.")
     st.stop()
 
 market = market_filter()
@@ -1417,20 +1523,69 @@ news_df = get_news(ticker)
 news_score, news_label = score_news_sentiment(news_df)
 earnings_risk, earnings_date, earnings_days = get_earnings_warning(ticker)
 
+setup = score_stock_setup(df, news_score, earnings_risk)
 
-if "CALL" in setup["signal"]:
-    st.success(f"{setup['signal']} | Call Score: {setup['call_score']} | Put Score: {setup['put_score']}")
-elif "PUT" in setup["signal"]:
-    st.error(f"{setup['signal']} | Call Score: {setup['call_score']} | Put Score: {setup['put_score']}")
+if setup is None:
+    st.error("Not enough data to generate a setup.")
+    st.stop()
+
+
+# ============================================================
+# DASHBOARD
+# ============================================================
+
+st.subheader("Trade Decision Dashboard")
+
+top1, top2, top3, top4 = st.columns(4)
+top1.metric("Input", ticker_input)
+top2.metric("Resolved Ticker", ticker)
+top3.metric("Price", f"${setup['price']:.2f}")
+top4.metric("Preferred Side", setup["preferred_side"].upper())
+
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Stock Setup Score", setup["stock_score"])
+m2.metric("Call Setup Score", setup["call_score"])
+m3.metric("Put Setup Score", setup["put_score"])
+m4.metric("Setup", setup["signal"])
+
+if setup["signal"] == "NO TRADE / WAIT":
+    st.warning("Current stock setup is weak. A good option contract alone does not make this a trade.")
+elif "STRONG" in setup["signal"]:
+    st.success("Stock setup is strong. Now confirm option quality and risk.")
 else:
-    st.info(f"{setup['signal']} | Call Score: {setup['call_score']} | Put Score: {setup['put_score']}")
+    st.info("This is a watchlist setup. Wait for better confirmation or cleaner entry.")
 
+
+# ============================================================
+# MARKET / NEWS / EARNINGS
+# ============================================================
+
+st.subheader("Market, News, and Earnings Risk")
+
+risk1, risk2, risk3, risk4 = st.columns(4)
+risk1.metric("Market Bias", market["bias"])
+risk2.metric("VIX", "-" if np.isnan(market["vix"]) else f"{market['vix']:.2f}")
+risk3.metric("News Sentiment", news_label)
+risk4.metric("Earnings Risk", earnings_risk)
+
+if earnings_date:
+    st.write(f"**Earnings Date:** {earnings_date} | **Days Away:** {earnings_days}")
+
+if earnings_risk == "High":
+    st.error("High earnings risk. Avoid unless intentionally trading earnings.")
+elif earnings_risk == "Medium":
+    st.warning("Medium earnings risk. Watch for IV crush.")
+
+
+# ============================================================
+# TECHNICAL METRICS
+# ============================================================
 
 c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Price", f"${setup['price']:.2f}")
-c2.metric("RSI", f"{setup['rsi']:.1f}")
-c3.metric("Support", f"${setup['support']:.2f}")
-c4.metric("Resistance", f"${setup['resistance']:.2f}")
+c1.metric("RSI", f"{setup['rsi']:.1f}")
+c2.metric("Support", f"${setup['support']:.2f}")
+c3.metric("Resistance", f"${setup['resistance']:.2f}")
+c4.metric("ATR", f"${setup['atr']:.2f}")
 c5.metric("Volume Ratio", f"{setup['vol_ratio']:.2f}x")
 
 c6, c7, c8, c9, c10 = st.columns(5)
@@ -1440,29 +1595,11 @@ c8.metric("Stop", "-" if np.isnan(setup["stop"]) else f"${setup['stop']:.2f}")
 c9.metric("Target 1", "-" if np.isnan(setup["target1"]) else f"${setup['target1']:.2f}")
 c10.metric("Target 2", "-" if np.isnan(setup["target2"]) else f"${setup['target2']:.2f}")
 
-st.subheader("Market / News / Earnings Filters")
-
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Market Bias", market["bias"])
-m2.metric("VIX", "-" if np.isnan(market["vix"]) else f"{market['vix']:.2f}")
-m3.metric("News Sentiment", news_label)
-m4.metric("News Score", news_score)
-
-if earnings_date:
-    st.write(f"**Earnings Risk:** {earnings_risk} | Earnings Date: {earnings_date} | Days Away: {earnings_days}")
-else:
-    st.write(f"**Earnings Risk:** {earnings_risk}")
-
-if earnings_risk == "High":
-    st.error("High earnings risk. Avoid unless intentionally trading earnings.")
-elif earnings_risk == "Medium":
-    st.warning("Medium earnings risk. Be careful with IV crush.")
-
-with st.expander("Why this signal?"):
+with st.expander("Stock Setup Reasons"):
     left, right = st.columns(2)
 
     with left:
-        st.markdown("### Call Reasons")
+        st.markdown("### Call Setup Reasons")
         if setup["call_reasons"]:
             for reason in setup["call_reasons"]:
                 st.write(f"- {reason}")
@@ -1470,7 +1607,7 @@ with st.expander("Why this signal?"):
             st.write("No strong call reasons.")
 
     with right:
-        st.markdown("### Put Reasons")
+        st.markdown("### Put Setup Reasons")
         if setup["put_reasons"]:
             for reason in setup["put_reasons"]:
                 st.write(f"- {reason}")
@@ -1481,10 +1618,10 @@ st.plotly_chart(make_chart(df, setup, ticker), use_container_width=True)
 
 
 # ============================================================
-# OPTIONS CHAIN + SPREADS
+# OPTIONS + FINAL DECISION
 # ============================================================
 
-st.subheader("Options Chain")
+st.subheader("Options Contract Analysis")
 
 try:
     expirations = get_expirations(ticker)
@@ -1495,24 +1632,21 @@ try:
 
     exp = st.selectbox("Expiration Date", expirations)
 
-    suggested_side = "call" if setup["call_score"] >= setup["put_score"] else "put"
-
     side = st.radio(
-        "Single-Leg Option Side",
+        "Option Side",
         ["call", "put"],
-        index=0 if suggested_side == "call" else 1
+        index=0 if setup["preferred_side"] == "call" else 1
     )
 
     calls, puts = get_chain(ticker, exp)
     chain = calls if side == "call" else puts
-    setup_score = setup["call_score"] if side == "call" else setup["put_score"]
 
     option_df = build_options_table(
         chain=chain,
         option_type=side,
         stock_price=setup["price"],
         exp=exp,
-        setup_score=setup_score,
+        stock_setup_score=setup["stock_score"],
         min_delta=min_delta,
         max_delta=max_delta,
         min_volume=min_volume,
@@ -1526,44 +1660,51 @@ try:
     else:
         best = option_df.iloc[0]
 
-        confidence_score, confidence_label, penalties = final_confidence(
-            setup=setup,
-            option_row=best,
-            side=side,
-            news_score=news_score,
-            earnings_risk=earnings_risk,
-            market=market
+        option_score = int(best["option_quality_score"])
+        final_score = int(best["final_trade_score"])
+
+        market_conflict = (
+            (side == "call" and not market["call_ok"]) or
+            (side == "put" and not market["put_ok"])
         )
 
-        st.subheader("Final Single-Leg Trade Confidence")
+        decision, decision_reason = decision_label(
+            setup["stock_score"],
+            option_score,
+            final_score,
+            earnings_risk,
+            market_conflict
+        )
 
-        if confidence_label == "DO NOT TRADE":
-            st.error(f"{confidence_label} | Confidence Score: {confidence_score}")
-        elif confidence_score >= 70:
-            st.success(f"{confidence_label} | Confidence Score: {confidence_score}")
+        st.subheader("Final Trade Decision")
+
+        d1, d2, d3, d4 = st.columns(4)
+        d1.metric("Stock Setup Score", setup["stock_score"])
+        d2.metric("Option Quality Score", option_score)
+        d3.metric("Final Trade Score", final_score)
+        d4.metric("Decision", decision)
+
+        if decision == "TRADE CANDIDATE":
+            st.success(f"{decision}: {decision_reason}")
+        elif decision in ["FIND BETTER CONTRACT", "WATCHLIST"]:
+            st.warning(f"{decision}: {decision_reason}")
         else:
-            st.warning(f"{confidence_label} | Confidence Score: {confidence_score}")
+            st.error(f"{decision}: {decision_reason}")
 
-        if penalties:
-            st.write("**Warnings / Penalties:**")
-            for p in penalties:
-                st.write(f"- {p}")
+        with st.expander("Clean Trade Checklist"):
+            checklist = {
+                "Stock setup score 60+": setup["stock_score"] >= 60,
+                "Option quality score 60+": option_score >= 60,
+                "Final trade score 65+": final_score >= 65,
+                "Delta within range": min_delta <= abs(best["delta"]) <= max_delta,
+                "Bid/ask spread acceptable": best["spread_pct"] <= max_spread_pct,
+                "Volume acceptable": best["volume"] >= min_volume,
+                "Open interest acceptable": best["openInterest"] >= min_oi,
+                "Contract cost acceptable": best["cost_ask"] <= max_cost,
+                "Earnings risk not high": earnings_risk != "High",
+                "Market does not conflict": not market_conflict
+            }
 
-        checklist = {
-            "Signal score above 60": setup_score >= 60,
-            "Delta within range": min_delta <= abs(best["delta"]) <= max_delta,
-            "Spread acceptable": best["spread_pct"] <= max_spread_pct,
-            "Volume acceptable": best["volume"] >= min_volume,
-            "Open interest acceptable": best["openInterest"] >= min_oi,
-            "Contract cost acceptable": best["cost_ask"] <= max_cost,
-            "Earnings risk not high": earnings_risk != "High",
-            "Market does not strongly conflict": not (
-                (side == "call" and not market["call_ok"]) or
-                (side == "put" and not market["put_ok"])
-            )
-        }
-
-        with st.expander("Trade Checklist"):
             for item, passed in checklist.items():
                 st.write(("✅ " if passed else "❌ ") + item)
 
@@ -1594,24 +1735,25 @@ try:
             "impliedVolatility": "IV %",
             "delta": "Delta",
             "prob_itm": "Prob ITM %",
-            "trade_score": "Trade Score"
+            "option_quality_score": "Option Quality Score",
+            "final_trade_score": "Final Trade Score"
         })
 
-        st.dataframe(display, use_container_width=True, height=420)
+        st.dataframe(display, use_container_width=True, height=450)
 
-        st.markdown("### Best Single Contract Based on Your Filters")
+        st.markdown("### Best Contract Summary")
 
         b1, b2, b3, b4, b5 = st.columns(5)
         b1.metric("Strike", f"${best['strike']:.2f}")
         b2.metric("Ask Cost", f"${best['cost_ask']:.0f}")
         b3.metric("Delta", f"{best['delta']:.2f}")
         b4.metric("Prob ITM", f"{best['prob_itm'] * 100:.1f}%")
-        b5.metric("Trade Score", f"{best['trade_score']}")
+        b5.metric("Final Score", f"{final_score}")
 
         risk_per_contract = best["cost_ask"] * (stop_loss_pct / 100)
         max_contracts = int(risk_per_trade // max(risk_per_contract, 1))
 
-        st.markdown("### Single-Leg Trade Plan")
+        st.markdown("### Trade Plan")
         st.write(f"**Contract:** {best['contractSymbol']}")
         st.write(f"**Expiration:** {exp}")
         st.write(f"**Side:** {side.upper()}")
@@ -1622,7 +1764,7 @@ try:
         st.write(f"**Stop loss:** -{stop_loss_pct}% option loss or break of stock technical stop")
         st.write(f"**Days to expiration:** {dte(exp)}")
 
-    st.subheader("Options Spread Strategies")
+    st.subheader("Options Spread Strategy Optimizer")
 
     with st.spinner("Building spread strategies..."):
         all_spreads, debit_calls, debit_puts, credit_puts, credit_calls = build_all_spreads(
@@ -1681,11 +1823,15 @@ try:
         st.write("- **Debit Put Spread:** bearish, defined risk, cheaper than buying a put.")
         st.write("- **Credit Put Spread:** bullish/neutral, collects premium, wins if price stays above breakeven.")
         st.write("- **Credit Call Spread:** bearish/neutral, collects premium, wins if price stays below breakeven.")
-        st.write("- Probability estimates are simplified and should be treated as directional risk estimates, not guarantees.")
+        st.write("- Probability estimates are simplified and should be treated as risk estimates, not guarantees.")
 
 except Exception as e:
     st.error(f"Options error: {e}")
 
+
+# ============================================================
+# NEWS
+# ============================================================
 
 st.subheader("Recent News")
 
