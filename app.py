@@ -1,761 +1,497 @@
-
-# TradeEdge Pro
-# Install:
-# pip install streamlit yfinance pandas numpy plotly requests
+# =========================================
+# TradeEdge Pro - Clean Yahoo Version
+# =========================================
+# pip install streamlit yfinance pandas numpy plotly lxml
 
 import math
 from datetime import datetime, date
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import requests
 import streamlit as st
 import yfinance as yf
 
 
-# =========================================================
-# PAGE CONFIG
-# =========================================================
+# =========================
+# APP CONFIG
+# =========================
 st.set_page_config(page_title="TradeEdge Pro", page_icon="📈", layout="wide")
 
+JOURNAL_FILE = "trade_journal.csv"
+SCAN_DEFAULT = "AAPL, MSFT, NVDA, TSLA, AMZN, GOOGL, META, AMD, SPY, QQQ"
 
-# =========================================================
+
+# =========================
 # STYLE
-# =========================================================
+# =========================
 st.markdown(
     """
-<style>
-.stApp { background-color:#f3f4f6; color:#111827; }
-.block-container { padding-top:1rem; padding-bottom:2rem; }
+    <style>
+    .stApp {
+        background: #f3f4f6;
+        color: #111827;
+    }
 
-.sticky-header {
-    position: sticky;
-    top: 0;
-    z-index: 999;
-    background: #ffffff;
-    padding: 18px;
-    border: 1px solid #d1d5db;
-    border-radius: 0 0 18px 18px;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.10);
-}
+    div[data-testid="stMetric"] {
+        background: white;
+        border: 1px solid #d1d5db;
+        border-radius: 16px;
+        padding: 14px;
+        box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+        min-height: 108px;
+    }
 
-.floating-reset {
-    position: fixed;
-    bottom: 22px;
-    right: 22px;
-    z-index: 9999;
-}
+    .signal-box {
+        padding: 28px;
+        border-radius: 22px;
+        text-align: center;
+        color: white;
+        margin: 18px 0 20px 0;
+        box-shadow: 0 12px 30px rgba(0,0,0,0.22);
+    }
 
-.signal-box {
-    padding: 28px;
-    border-radius: 20px;
-    text-align: center;
-    margin-top: 18px;
-    margin-bottom: 22px;
-    color: white;
-    box-shadow: 0 12px 30px rgba(0,0,0,0.20);
-}
+    .signal-title {
+        font-size: 40px;
+        font-weight: 900;
+        line-height: 1.1;
+    }
 
-.signal-title {
-    font-size: 42px;
-    font-weight: 900;
-    letter-spacing: 1px;
-    color: white;
-}
+    .signal-sub {
+        font-size: 18px;
+        margin-top: 8px;
+    }
 
-.signal-subtitle {
-    font-size: 20px;
-    margin-top: 10px;
-    color: white;
-}
+    .card {
+        background: white;
+        border: 1px solid #d1d5db;
+        border-radius: 16px;
+        padding: 16px;
+        margin-bottom: 12px;
+    }
 
-.news-card {
-    background:#ffffff;
-    border:1px solid #d1d5db;
-    border-radius:14px;
-    padding:16px;
-    margin-bottom:12px;
-    color:#111827;
-}
+    .small-note {
+        color: #6b7280;
+        font-size: 13px;
+    }
 
-.news-card a {
-    color:#2563eb;
-    text-decoration:none;
-    font-weight:700;
-}
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+        flex-wrap: wrap;
+    }
 
-div[data-testid="stMetric"] {
-    background:#ffffff;
-    border:1px solid #d1d5db;
-    border-radius:16px;
-    padding:16px;
-    box-shadow:0 6px 18px rgba(0,0,0,0.08);
-}
-
-button { border-radius:12px !important; }
-
-.stTabs [data-baseweb="tab-list"] { gap:8px; }
-
-.stTabs [data-baseweb="tab"] {
-    background:#ffffff;
-    border:1px solid #d1d5db;
-    border-radius:12px;
-    padding:10px 16px;
-    color:#111827;
-}
-
-.stTabs [aria-selected="true"] {
-    background:#2563eb !important;
-    color:white !important;
-}
-</style>
-""",
+    .stTabs [data-baseweb="tab"] {
+        background: white;
+        border-radius: 12px;
+        border: 1px solid #d1d5db;
+        padding: 10px 14px;
+    }
+    </style>
+    """,
     unsafe_allow_html=True,
 )
 
 
-# =========================================================
-# CONSTANTS
-# =========================================================
-JOURNAL_FILE = "trade_journal.csv"
-
-POPULAR_TICKERS = {
-    "Apple": "AAPL",
-    "Microsoft": "MSFT",
-    "Nvidia": "NVDA",
-    "Tesla": "TSLA",
-    "Amazon": "AMZN",
-    "Google / Alphabet": "GOOGL",
-    "Meta": "META",
-    "Netflix": "NFLX",
-    "AMD": "AMD",
-    "Palantir": "PLTR",
-    "Robinhood": "HOOD",
-    "Ford": "F",
-    "Disney": "DIS",
-    "Costco": "COST",
-    "Walmart": "WMT",
-    "Coca-Cola": "KO",
-    "JPMorgan": "JPM",
-    "Bank of America": "BAC",
-    "Goldman Sachs": "GS",
-    "Coinbase": "COIN",
-    "Boeing": "BA",
-    "Target": "TGT",
-    "Nike": "NKE",
-    "SPY ETF": "SPY",
-    "QQQ ETF": "QQQ",
-    "IWM ETF": "IWM",
-    "DIA ETF": "DIA",
-}
-
-DEFAULT_SCAN_TICKERS = [
-    "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "GOOGL", "META",
-    "NFLX", "AMD", "PLTR", "HOOD", "COIN", "SPY", "QQQ", "IWM"
-]
-
-
-# =========================================================
-# SESSION STATE
-# =========================================================
-if "ticker" not in st.session_state:
-    st.session_state.ticker = "AAPL"
-if "last_alert" not in st.session_state:
-    st.session_state.last_alert = ""
-if "manual_ticker" not in st.session_state:
-    st.session_state.manual_ticker = ""
-if "selected_company" not in st.session_state:
-    st.session_state.selected_company = "Apple"
-
-
-def reset_app():
-    st.session_state.manual_ticker = ""
-    st.session_state.last_alert = ""
-
-
-# =========================================================
-# JOURNAL
-# =========================================================
-def load_journal() -> pd.DataFrame:
-    cols = [
-        "Date/Time", "Ticker", "Trade Type", "Strike", "Expiration",
-        "Entry Price", "Exit Price", "Contracts", "Profit/Loss", "Win/Loss"
-    ]
-
-    try:
-        df = pd.read_csv(JOURNAL_FILE)
-        for col in cols:
-            if col not in df.columns:
-                df[col] = np.nan
-        return df[cols]
-    except Exception:
-        return pd.DataFrame(columns=cols)
-
-
-def save_journal(df: pd.DataFrame) -> None:
-    df.to_csv(JOURNAL_FILE, index=False)
-
-
-def calculate_pl(entry_price: float, exit_price: float, contracts: int) -> float:
-    try:
-        return round((float(exit_price) - float(entry_price)) * 100 * int(contracts), 2)
-    except Exception:
-        return 0.0
-
-
-# =========================================================
+# =========================
 # HELPERS
-# =========================================================
-def safe_format(value, fmt="{:.2f}") -> str:
-    try:
-        if pd.isna(value):
-            return "N/A"
-        return fmt.format(value)
-    except Exception:
-        return "N/A"
+# =========================
+def flatten_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None:
+        return pd.DataFrame()
+
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    return df
 
 
 def normal_cdf(x: float) -> float:
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
 
-def clean_iv_value(iv) -> float:
+def safe_num(x, default: float = 0.0) -> float:
     try:
-        if pd.isna(iv) or float(iv) < 0.01:
+        if x is None or pd.isna(x):
+            return default
+        return float(x)
+    except Exception:
+        return default
+
+
+def fmt_money(x) -> str:
+    try:
+        if x is None or pd.isna(x):
+            return "N/A"
+        return f"${float(x):,.2f}"
+    except Exception:
+        return "N/A"
+
+
+def fmt_number(x) -> str:
+    try:
+        if x is None or pd.isna(x):
+            return "N/A"
+        return f"{float(x):,.0f}"
+    except Exception:
+        return "N/A"
+
+
+def fmt_pct(x) -> str:
+    try:
+        if x is None or pd.isna(x):
+            return "N/A"
+        return f"{float(x) * 100:.1f}%"
+    except Exception:
+        return "N/A"
+
+
+def clean_iv(iv) -> float:
+    try:
+        iv = float(iv)
+        if pd.isna(iv) or iv <= 0.01:
             return 0.30
-        return float(iv)
+        return iv
     except Exception:
         return 0.30
 
 
-def black_scholes_greeks(stock_price, strike, days_to_expiration, iv, option_type):
-    try:
-        if stock_price <= 0 or strike <= 0 or days_to_expiration <= 0 or iv <= 0:
-            return np.nan, np.nan, np.nan, np.nan
-
-        t = days_to_expiration / 365
-        r = 0.045
-
-        d1 = (
-            math.log(stock_price / strike)
-            + (r + 0.5 * iv ** 2) * t
-        ) / (iv * math.sqrt(t))
-
-        d2 = d1 - iv * math.sqrt(t)
-        pdf_d1 = math.exp(-0.5 * d1 ** 2) / math.sqrt(2 * math.pi)
-
-        if option_type == "CALL":
-            delta = normal_cdf(d1)
-            theta = (
-                -stock_price * pdf_d1 * iv / (2 * math.sqrt(t))
-                - r * strike * math.exp(-r * t) * normal_cdf(d2)
-            ) / 365
-        else:
-            delta = normal_cdf(d1) - 1
-            theta = (
-                -stock_price * pdf_d1 * iv / (2 * math.sqrt(t))
-                + r * strike * math.exp(-r * t) * normal_cdf(-d2)
-            ) / 365
-
-        gamma = pdf_d1 / (stock_price * iv * math.sqrt(t))
-        vega = stock_price * pdf_d1 * math.sqrt(t) / 100
-
-        return delta, gamma, theta, vega
-    except Exception:
-        return np.nan, np.nan, np.nan, np.nan
-
-
-def estimate_probability_of_profit(stock_price, strike, premium, days_to_expiration, iv, option_type):
-    try:
-        if stock_price <= 0 or strike <= 0 or premium <= 0 or days_to_expiration <= 0 or iv <= 0:
-            return np.nan
-
-        t = days_to_expiration / 365
-
-        if option_type == "CALL":
-            breakeven = strike + premium
-            z = math.log(breakeven / stock_price) / (iv * math.sqrt(t))
-            pop = 1 - normal_cdf(z)
-        else:
-            breakeven = strike - premium
-            if breakeven <= 0:
-                return np.nan
-            z = math.log(breakeven / stock_price) / (iv * math.sqrt(t))
-            pop = normal_cdf(z)
-
-        return max(0, min(1, pop))
-    except Exception:
-        return np.nan
-
-
-def calculate_iv_rank(options_df: pd.DataFrame):
-    try:
-        iv_series = options_df["Clean IV"].replace(0, np.nan).dropna()
-        if iv_series.empty:
-            return np.nan
-
-        iv_min = iv_series.min()
-        iv_max = iv_series.max()
-        current_iv = iv_series.median()
-
-        if iv_max == iv_min:
-            return 50.0
-
-        iv_rank = ((current_iv - iv_min) / (iv_max - iv_min)) * 100
-        return max(0, min(100, iv_rank))
-    except Exception:
-        return np.nan
-
-
-def choose_best_contract(options_df: pd.DataFrame):
-    try:
-        if options_df.empty:
-            return None
-
-        sorted_df = options_df.sort_values(
-            by=["Option Score", "volume", "openInterest"],
-            ascending=[False, False, False]
-        )
-        return sorted_df.iloc[0]
-    except Exception:
+def get_latest_price(df: pd.DataFrame):
+    if df is None or df.empty or "Close" not in df.columns:
         return None
 
+    close = pd.to_numeric(df["Close"], errors="coerce").dropna()
+    if close.empty:
+        return None
 
-# =========================================================
+    return float(close.iloc[-1])
+
+
+def get_price_change(df: pd.DataFrame):
+    if df is None or df.empty or "Close" not in df.columns:
+        return None, None
+
+    close = pd.to_numeric(df["Close"], errors="coerce").dropna()
+    if len(close) < 2:
+        return None, None
+
+    latest = float(close.iloc[-1])
+    previous = float(close.iloc[-2])
+
+    if previous == 0:
+        return None, None
+
+    change = latest - previous
+    change_pct = change / previous
+
+    return change, change_pct
+
+
+def signal_color(signal: str) -> str:
+    if signal == "STRONG BUY CALL":
+        return "linear-gradient(135deg,#16a34a,#22c55e)"
+    if signal == "BUY CALL WATCH":
+        return "linear-gradient(135deg,#2563eb,#38bdf8)"
+    if signal == "STRONG BUY PUT":
+        return "linear-gradient(135deg,#dc2626,#ef4444)"
+    if signal == "PUT WATCH":
+        return "linear-gradient(135deg,#ea580c,#f97316)"
+    return "linear-gradient(135deg,#6b7280,#9ca3af)"
+
+
+# =========================
+# S&P 500 UNIVERSE
+# =========================
+@st.cache_data(ttl=24 * 60 * 60)
+def load_sp500_universe() -> pd.DataFrame:
+    try:
+        tables = pd.read_html("https://en.wikipedia.org/wiki/List_of_S%26P_500_companies")
+        sp500 = tables[0].rename(columns={"Symbol": "Ticker", "Security": "Company"})
+
+        sp500["Ticker"] = sp500["Ticker"].astype(str).str.replace(".", "-", regex=False)
+        sp500["Company"] = sp500["Company"].astype(str)
+        sp500["Display"] = sp500["Company"] + " (" + sp500["Ticker"] + ")"
+
+        return sp500[["Ticker", "Company", "Display"]].dropna()
+
+    except Exception:
+        return pd.DataFrame(
+            [
+                {"Ticker": "AAPL", "Company": "Apple", "Display": "Apple (AAPL)"},
+                {"Ticker": "MSFT", "Company": "Microsoft", "Display": "Microsoft (MSFT)"},
+                {"Ticker": "NVDA", "Company": "Nvidia", "Display": "Nvidia (NVDA)"},
+                {"Ticker": "TSLA", "Company": "Tesla", "Display": "Tesla (TSLA)"},
+                {"Ticker": "BAC", "Company": "Bank of America", "Display": "Bank of America (BAC)"},
+                {"Ticker": "SPY", "Company": "SPY ETF", "Display": "SPY ETF (SPY)"},
+                {"Ticker": "QQQ", "Company": "QQQ ETF", "Display": "QQQ ETF (QQQ)"},
+            ]
+        )
+
+
+def resolve_ticker(user_input: str, selected_display: str, sp500_df: pd.DataFrame) -> str:
+    if user_input and user_input.strip():
+        query = user_input.strip().lower()
+
+        exact_ticker = sp500_df[sp500_df["Ticker"].str.lower() == query]
+        if not exact_ticker.empty:
+            return str(exact_ticker.iloc[0]["Ticker"]).upper()
+
+        exact_company = sp500_df[sp500_df["Company"].str.lower() == query]
+        if not exact_company.empty:
+            return str(exact_company.iloc[0]["Ticker"]).upper()
+
+        contains_company = sp500_df[
+            sp500_df["Company"].str.lower().str.contains(query, na=False, regex=False)
+        ]
+        if not contains_company.empty:
+            return str(contains_company.iloc[0]["Ticker"]).upper()
+
+        return user_input.upper().strip().replace(".", "-")
+
+    return selected_display.split("(")[-1].replace(")", "").strip().upper()
+
+
+# =========================
 # DATA LOADERS
-# =========================================================
+# =========================
 @st.cache_data(ttl=60)
-def load_data(symbol, selected_period, interval):
-    if interval in ["15m", "30m"] and selected_period in ["6mo", "1y", "2y"]:
-        selected_period = "60d"
+def load_data(ticker: str, period: str, interval: str) -> pd.DataFrame:
+    try:
+        if interval in ["15m", "30m"] and period in ["6mo", "1y"]:
+            period = "60d"
 
-    if interval == "1h" and selected_period == "2y":
-        selected_period = "730d"
+        df = yf.download(
+            ticker,
+            period=period,
+            interval=interval,
+            progress=False,
+            auto_adjust=True,
+            threads=False,
+        )
 
-    data = yf.download(
-        symbol,
-        period=selected_period,
-        interval=interval,
-        auto_adjust=True,
-        progress=False,
-        threads=False
-    )
+        df = flatten_columns(df)
 
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
+        if df is None or df.empty:
+            return pd.DataFrame()
 
-    return data
+        required = ["Open", "High", "Low", "Close", "Volume"]
+        for col in required:
+            if col not in df.columns:
+                df[col] = np.nan
+
+        return df.dropna(subset=["Close"])
+
+    except Exception:
+        return pd.DataFrame()
 
 
 @st.cache_data(ttl=120)
-def load_info(symbol):
+def load_info(ticker: str) -> dict:
     try:
-        return yf.Ticker(symbol).info
+        return yf.Ticker(ticker).info or {}
     except Exception:
         return {}
 
 
-def load_yahoo_options(symbol):
+@st.cache_data(ttl=120)
+def get_options_expirations(ticker: str):
     try:
-        stock = yf.Ticker(symbol)
-        expirations = list(stock.options)
-
-        if not expirations:
-            return pd.DataFrame(), []
-
-        all_data = []
-
-        for exp in expirations:
-            try:
-                chain = stock.option_chain(exp)
-
-                calls = chain.calls.copy()
-                calls["type"] = "call"
-                calls["expiration"] = exp
-
-                puts = chain.puts.copy()
-                puts["type"] = "put"
-                puts["expiration"] = exp
-
-                all_data.append(calls)
-                all_data.append(puts)
-            except Exception:
-                continue
-
-        if not all_data:
-            return pd.DataFrame(), expirations
-
-        full_df = pd.concat(all_data, ignore_index=True)
-        return full_df, expirations
-
+        return list(yf.Ticker(ticker).options)
     except Exception:
-        return pd.DataFrame(), []
+        return []
 
 
-def load_polygon_options(symbol):
+def load_option_chain(ticker: str, expiration: str, typ: str) -> pd.DataFrame:
     try:
-        api_key = st.secrets.get("POLYGON_API_KEY", "")
-
-        if not api_key:
-            return pd.DataFrame(), []
-
-        url = f"https://api.polygon.io/v3/snapshot/options/{symbol.upper()}"
-        params = {"apiKey": api_key, "limit": 250}
-
-        response = requests.get(url, params=params, timeout=15)
-
-        if response.status_code != 200:
-            return pd.DataFrame(), []
-
-        results = response.json().get("results", [])
-
-        if not results:
-            return pd.DataFrame(), []
-
-        rows = []
-
-        for opt in results:
-            details = opt.get("details", {}) or {}
-            greeks = opt.get("greeks", {}) or {}
-            quote = opt.get("last_quote", {}) or {}
-            trade = opt.get("last_trade", {}) or {}
-            day = opt.get("day", {}) or {}
-
-            rows.append({
-                "contractSymbol": details.get("ticker"),
-                "strike": details.get("strike_price"),
-                "expiration": details.get("expiration_date"),
-                "type": str(details.get("contract_type", "")).lower(),
-                "bid": quote.get("bid"),
-                "ask": quote.get("ask"),
-                "lastPrice": trade.get("price"),
-                "volume": day.get("volume"),
-                "openInterest": opt.get("open_interest"),
-                "impliedVolatility": opt.get("implied_volatility"),
-                "Delta": greeks.get("delta"),
-                "Gamma": greeks.get("gamma"),
-                "Theta": greeks.get("theta"),
-                "Vega": greeks.get("vega"),
-                "dataSource": "Polygon"
-            })
-
-        df = pd.DataFrame(rows)
-
-        numeric_cols = [
-            "strike", "bid", "ask", "lastPrice", "volume", "openInterest",
-            "impliedVolatility", "Delta", "Gamma", "Theta", "Vega"
-        ]
-
-        for col in numeric_cols:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        df["volume"] = df["volume"].fillna(0)
-        df["openInterest"] = df["openInterest"].fillna(0)
-        df["lastPrice"] = df["lastPrice"].fillna(0)
-        df["bid"] = df["bid"].fillna(0)
-        df["ask"] = df["ask"].fillna(0)
-
-        df = df.dropna(subset=["contractSymbol", "strike", "expiration", "type"])
-
-        expirations = sorted(df["expiration"].dropna().unique().tolist())
-        return df, expirations
-
+        chain = yf.Ticker(ticker).option_chain(expiration)
+        return chain.calls.copy() if typ == "CALL" else chain.puts.copy()
     except Exception:
-        return pd.DataFrame(), []
+        return pd.DataFrame()
 
 
-# =========================================================
-# TECHNICAL INDICATORS
-# =========================================================
-def calculate_rsi(series, window=14):
-    delta = series.diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
-
-    avg_gain = gain.rolling(window, min_periods=5).mean()
-    avg_loss = loss.rolling(window, min_periods=5).mean()
-
-    rs = avg_gain / avg_loss.replace(0, np.nan)
-    return 100 - (100 / (1 + rs))
+@st.cache_data(ttl=300)
+def load_news(ticker: str):
+    try:
+        return yf.Ticker(ticker).news or []
+    except Exception:
+        return []
 
 
-def calculate_macd(series):
-    ema12 = series.ewm(span=12, adjust=False).mean()
-    ema26 = series.ewm(span=26, adjust=False).mean()
+# =========================
+# INDICATORS / SIGNALS
+# =========================
+def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
 
-    macd_line = ema12 - ema26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    close = pd.to_numeric(df["Close"], errors="coerce")
+    high = pd.to_numeric(df["High"], errors="coerce")
+    low = pd.to_numeric(df["Low"], errors="coerce")
+    volume = pd.to_numeric(df["Volume"], errors="coerce").replace(0, np.nan).ffill().fillna(1)
 
-    return macd_line, signal_line
+    df["MA20"] = close.rolling(20, min_periods=5).mean()
+    df["MA50"] = close.rolling(50, min_periods=10).mean()
+
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(14, min_periods=5).mean()
+    loss = (-delta.clip(upper=0)).rolling(14, min_periods=5).mean()
+    rs = gain / loss.replace(0, np.nan)
+
+    df["RSI"] = 100 - (100 / (1 + rs))
+
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    df["MACD"] = ema12 - ema26
+    df["MACD_SIGNAL"] = df["MACD"].ewm(span=9, adjust=False).mean()
+
+    typical_price = (high + low + close) / 3
+    df["VWAP"] = ((typical_price * volume).cumsum() / volume.cumsum()).ffill()
+
+    df["Volume_MA20"] = pd.to_numeric(df["Volume"], errors="coerce").rolling(20, min_periods=5).mean()
+
+    return df
 
 
-def calculate_indicators(data):
-    data = data.copy()
+def calculate_signal(df: pd.DataFrame):
+    df = add_indicators(df)
 
-    data["RSI"] = calculate_rsi(data["Close"])
-    data["MACD"], data["MACD_SIGNAL"] = calculate_macd(data["Close"])
-    data["MA20"] = data["Close"].rolling(20, min_periods=5).mean()
-    data["MA50"] = data["Close"].rolling(50, min_periods=10).mean()
-    data["Volume_MA20"] = data["Volume"].rolling(20, min_periods=5).mean()
+    clean = df.dropna(subset=["Close"])
+    if clean.empty:
+        raise ValueError("No valid price data found.")
 
-    return data
+    latest = clean.iloc[-1]
 
+    price = safe_num(latest.get("Close"), 0)
+    rsi = safe_num(latest.get("RSI"), 50)
+    ma20 = safe_num(latest.get("MA20"), price)
+    ma50 = safe_num(latest.get("MA50"), price)
+    macd = safe_num(latest.get("MACD"), 0)
+    macd_signal = safe_num(latest.get("MACD_SIGNAL"), 0)
+    vwap = safe_num(latest.get("VWAP"), price)
 
-def calculate_signal(data):
-    data = calculate_indicators(data)
-    data = data.dropna(subset=["Close", "RSI", "MACD", "MACD_SIGNAL", "MA20", "MA50"])
+    support = safe_num(df["Low"].tail(30).min(), price)
+    resistance = safe_num(df["High"].tail(30).max(), price)
 
-    if data.empty:
-        raise ValueError("Not enough price history to calculate indicators. Try a longer chart period.")
-
-    latest = data.iloc[-1]
-
-    price = float(latest["Close"])
-    rsi = float(latest["RSI"])
-    macd = float(latest["MACD"])
-    macd_signal = float(latest["MACD_SIGNAL"])
-    ma20 = float(latest["MA20"])
-    ma50 = float(latest["MA50"])
-
-    support = float(data["Low"].tail(30).min())
-    resistance = float(data["High"].tail(30).max())
-
-    ideal_entry_low = support * 1.005
-    ideal_entry_high = support * 1.035
+    entry_low = support * 1.005
+    entry_high = support * 1.035
     bullish_exit = resistance * 0.985
+    bearish_entry = resistance * 0.995
     bearish_exit = support * 1.015
+    bearish_stop = support * 0.985
 
     score = 50
 
     if rsi < 30:
         score += 18
     elif 30 <= rsi <= 45:
-        score += 12
+        score += 10
     elif 45 < rsi <= 60:
         score += 5
     elif rsi > 70:
-        score -= 18
+        score -= 15
 
-    score += 18 if macd > macd_signal else -12
     score += 12 if price > ma20 else -8
     score += 10 if price > ma50 else -8
+    score += 10 if price > vwap else -5
+    score += 12 if macd > macd_signal else -8
 
-    if latest["Volume"] > latest["Volume_MA20"]:
-        score += 8
-
-    if support <= price <= resistance:
+    vol = safe_num(latest.get("Volume"), 0)
+    vol_ma = safe_num(latest.get("Volume_MA20"), 0)
+    if vol_ma > 0 and vol > vol_ma:
         score += 5
 
     score = max(0, min(100, int(score)))
 
-    if score >= 78:
+    if score >= 80:
         signal = "STRONG BUY CALL"
-    elif score >= 62:
+    elif score >= 65:
         signal = "BUY CALL WATCH"
-    elif score <= 22:
+    elif score <= 20:
         signal = "STRONG BUY PUT"
-    elif score <= 32:
+    elif score <= 35:
         signal = "PUT WATCH"
     else:
         signal = "NEUTRAL"
 
-    return data, {
+    return df, {
         "price": price,
         "rsi": rsi,
-        "macd": macd,
-        "macd_signal": macd_signal,
         "ma20": ma20,
         "ma50": ma50,
+        "macd": macd,
+        "macd_signal": macd_signal,
+        "vwap": vwap,
         "support": support,
         "resistance": resistance,
-        "ideal_entry_low": ideal_entry_low,
-        "ideal_entry_high": ideal_entry_high,
+        "entry_low": entry_low,
+        "entry_high": entry_high,
         "bullish_exit": bullish_exit,
+        "bearish_entry": bearish_entry,
         "bearish_exit": bearish_exit,
+        "bearish_stop": bearish_stop,
         "score": score,
-        "signal": signal
+        "signal": signal,
     }
 
 
-# =========================================================
-# CHART
-# =========================================================
-def make_chart(data, ticker, signal_data, selected_strike=None):
-    fig = go.Figure()
+# =========================
+# OPTIONS ENGINE
+# =========================
+def calc_greeks(S: float, K: float, T: float, iv: float, typ: str):
+    try:
+        if S <= 0 or K <= 0 or T <= 0 or iv <= 0:
+            return np.nan, np.nan, np.nan, np.nan
 
-    fig.add_trace(go.Candlestick(
-        x=data.index,
-        open=data["Open"],
-        high=data["High"],
-        low=data["Low"],
-        close=data["Close"],
-        name="Price"
-    ))
+        r = 0.045
+        d1 = (math.log(S / K) + (r + 0.5 * iv**2) * T) / (iv * math.sqrt(T))
+        d2 = d1 - iv * math.sqrt(T)
+        pdf = math.exp(-0.5 * d1**2) / math.sqrt(2 * math.pi)
 
-    fig.add_trace(go.Bar(
-        x=data.index,
-        y=data["Volume"],
-        name="Volume",
-        yaxis="y2",
-        opacity=0.25
-    ))
+        if typ == "CALL":
+            delta = normal_cdf(d1)
+            theta = (-S * pdf * iv / (2 * math.sqrt(T)) - r * K * math.exp(-r * T) * normal_cdf(d2)) / 365
+        else:
+            delta = normal_cdf(d1) - 1
+            theta = (-S * pdf * iv / (2 * math.sqrt(T)) + r * K * math.exp(-r * T) * normal_cdf(-d2)) / 365
 
-    fig.add_trace(go.Scatter(x=data.index, y=data["MA20"], name="20-Day MA", mode="lines"))
-    fig.add_trace(go.Scatter(x=data.index, y=data["MA50"], name="50-Day MA", mode="lines"))
+        gamma = pdf / (S * iv * math.sqrt(T))
+        vega = S * pdf * math.sqrt(T) / 100
 
-    fig.add_hline(y=signal_data["support"], line_dash="dash", annotation_text="Support")
-    fig.add_hline(y=signal_data["resistance"], line_dash="dash", annotation_text="Resistance")
+        return delta, gamma, theta, vega
 
-    fig.add_hrect(
-        y0=signal_data["ideal_entry_low"],
-        y1=signal_data["ideal_entry_high"],
-        opacity=0.18,
-        annotation_text="Ideal Entry Zone",
-        annotation_position="top left"
-    )
-
-    fig.add_hline(y=signal_data["bullish_exit"], line_dash="dot", annotation_text="Bullish Exit Target")
-    fig.add_hline(y=signal_data["bearish_exit"], line_dash="dot", annotation_text="Bearish Stop / Exit")
-
-    if selected_strike:
-        fig.add_hline(
-            y=selected_strike,
-            line_dash="solid",
-            annotation_text=f"Selected Strike: {selected_strike}"
-        )
-
-    fig.update_layout(
-        title=f"{ticker} Trading Chart",
-        height=620,
-        xaxis_rangeslider_visible=False,
-        margin=dict(l=10, r=10, t=50, b=10),
-        yaxis=dict(title="Price"),
-        yaxis2=dict(title="Volume", overlaying="y", side="right", showgrid=False),
-        paper_bgcolor="#ffffff",
-        plot_bgcolor="#ffffff",
-        font=dict(color="#111827")
-    )
-
-    return fig
+    except Exception:
+        return np.nan, np.nan, np.nan, np.nan
 
 
-# =========================================================
-# OPTIONS FUNCTIONS
-# =========================================================
-def ensure_option_columns(options_df):
-    required_cols = [
-        "contractSymbol", "strike", "lastPrice", "bid", "ask", "volume",
-        "openInterest", "impliedVolatility", "type", "expiration"
-    ]
+def calc_pop(S: float, K: float, premium: float, T: float, iv: float, typ: str):
+    try:
+        if S <= 0 or K <= 0 or premium <= 0 or T <= 0 or iv <= 0:
+            return np.nan
 
-    for col in required_cols:
-        if col not in options_df.columns:
-            options_df[col] = "N/A" if col in ["contractSymbol", "type", "expiration"] else np.nan
+        if typ == "CALL":
+            breakeven = K + premium
+            z = math.log(breakeven / S) / (iv * math.sqrt(T))
+            return max(0, min(1, 1 - normal_cdf(z)))
 
-    numeric_cols = [
-        "strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"
-    ]
+        breakeven = K - premium
+        if breakeven <= 0:
+            return np.nan
 
-    for col in numeric_cols:
-        options_df[col] = pd.to_numeric(options_df[col], errors="coerce")
+        z = math.log(breakeven / S) / (iv * math.sqrt(T))
+        return max(0, min(1, normal_cdf(z)))
 
-    options_df["volume"] = options_df["volume"].fillna(0)
-    options_df["openInterest"] = options_df["openInterest"].fillna(0)
-    options_df["lastPrice"] = options_df["lastPrice"].fillna(0)
-    options_df["bid"] = options_df["bid"].fillna(0)
-    options_df["ask"] = options_df["ask"].fillna(0)
-    options_df["impliedVolatility"] = options_df["impliedVolatility"].fillna(0)
-
-    return options_df
+    except Exception:
+        return np.nan
 
 
-def prepare_options(options_df, selected_expiration, option_type, stock_price, source):
-    if options_df.empty:
-        return pd.DataFrame()
-
-    out = ensure_option_columns(options_df.copy())
-
-    wanted_type = "call" if option_type == "CALL" else "put"
-
-    out["type"] = out["type"].astype(str).str.lower()
-    out = out[out["expiration"].astype(str) == str(selected_expiration)]
-    out = out[out["type"] == wanted_type]
-
-    if out.empty:
-        return pd.DataFrame()
-
-    days_to_expiration = max(
-        (datetime.strptime(selected_expiration, "%Y-%m-%d").date() - date.today()).days,
-        1
-    )
-
-    out["Clean IV"] = out["impliedVolatility"].apply(clean_iv_value)
-
-    out["Spread"] = np.where(
-        (out["ask"] > 0) & (out["bid"] > 0),
-        out["ask"] - out["bid"],
-        np.nan
-    )
-
-    for greek_col in ["Delta", "Gamma", "Theta", "Vega"]:
-        if greek_col not in out.columns:
-            out[greek_col] = np.nan
-
-    missing_greeks = (
-        out["Delta"].isna().all()
-        or out["Gamma"].isna().all()
-        or out["Theta"].isna().all()
-        or out["Vega"].isna().all()
-    )
-
-    if missing_greeks:
-        greeks = out.apply(
-            lambda row: black_scholes_greeks(
-                stock_price,
-                row["strike"],
-                days_to_expiration,
-                row["Clean IV"],
-                option_type
-            ),
-            axis=1
-        )
-
-        out["Delta"] = greeks.apply(lambda x: x[0])
-        out["Gamma"] = greeks.apply(lambda x: x[1])
-        out["Theta"] = greeks.apply(lambda x: x[2])
-        out["Vega"] = greeks.apply(lambda x: x[3])
-
-    out["Probability of Profit"] = out.apply(
-        lambda row: estimate_probability_of_profit(
-            stock_price,
-            row["strike"],
-            row["lastPrice"],
-            days_to_expiration,
-            row["Clean IV"],
-            option_type
-        ),
-        axis=1
-    )
-
-    out["Total Contract Cost"] = out["lastPrice"] * 100
-    out["IV Rank"] = calculate_iv_rank(out)
-    out["dataSource"] = source
-
-    return out
-
-
-def score_option(row, stock_price, delta_min, delta_max, pop_min):
+def score_contract(row: pd.Series, price: float) -> int:
     score = 0
 
-    volume = row.get("volume", 0) or 0
-    oi = row.get("openInterest", 0) or 0
-    last = row.get("lastPrice", 0) or 0
-    strike = row.get("strike", 0) or 0
-    delta = abs(row.get("Delta", np.nan))
-    pop = row.get("Probability of Profit", np.nan)
-    spread = row.get("Spread", np.nan)
+    volume = safe_num(row.get("volume"), 0)
+    oi = safe_num(row.get("openInterest"), 0)
+    strike = safe_num(row.get("strike"), 0)
+    last = safe_num(row.get("lastPrice"), 0)
+    spread = row.get("Spread")
+    delta = abs(safe_num(row.get("Delta"), np.nan))
+    pop = row.get("POP")
 
     if volume >= 500:
         score += 18
@@ -779,21 +515,26 @@ def score_option(row, stock_price, delta_min, delta_max, pop_min):
         elif spread <= 0.75:
             score += 6
 
-    if stock_price > 0 and strike > 0:
-        distance = abs(strike - stock_price) / stock_price
-
+    if price > 0 and strike > 0:
+        distance = abs(strike - price) / price
         if distance <= 0.03:
-            score += 20
+            score += 18
         elif distance <= 0.07:
             score += 12
         elif distance <= 0.12:
             score += 6
 
-    if not pd.isna(delta) and delta_min <= delta <= delta_max:
-        score += 20
+    if not pd.isna(delta):
+        if 0.25 <= delta <= 0.70:
+            score += 18
+        elif 0.15 <= delta <= 0.85:
+            score += 10
 
-    if not pd.isna(pop) and pop >= pop_min:
-        score += 15
+    if not pd.isna(pop):
+        if pop >= 0.40:
+            score += 12
+        elif pop >= 0.25:
+            score += 8
 
     if last > 0:
         score += 5
@@ -801,590 +542,554 @@ def score_option(row, stock_price, delta_min, delta_max, pop_min):
     return max(0, min(100, int(score)))
 
 
-# =========================================================
-# ALERTS / SCANNER
-# =========================================================
-def send_discord_alert(webhook_url, message):
+def prepare_options(df: pd.DataFrame, price: float, expiration: str, typ: str):
+    df = df.copy()
+
+    required = [
+        "contractSymbol",
+        "strike",
+        "lastPrice",
+        "bid",
+        "ask",
+        "volume",
+        "openInterest",
+        "impliedVolatility",
+    ]
+
+    for col in required:
+        if col not in df.columns:
+            df[col] = np.nan
+
+    numeric = ["strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]
+    for col in numeric:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df["volume"] = df["volume"].fillna(0)
+    df["openInterest"] = df["openInterest"].fillna(0)
+    df["lastPrice"] = df["lastPrice"].fillna(0)
+    df["bid"] = df["bid"].fillna(0)
+    df["ask"] = df["ask"].fillna(0)
+    df["IV"] = df["impliedVolatility"].apply(clean_iv)
+
+    days = max((datetime.strptime(expiration, "%Y-%m-%d").date() - date.today()).days, 1)
+    T = days / 365
+
+    greeks = df.apply(lambda r: calc_greeks(price, r["strike"], T, r["IV"], typ), axis=1)
+
+    df["Delta"] = [g[0] for g in greeks]
+    df["Gamma"] = [g[1] for g in greeks]
+    df["Theta"] = [g[2] for g in greeks]
+    df["Vega"] = [g[3] for g in greeks]
+    df["POP"] = df.apply(lambda r: calc_pop(price, r["strike"], r["lastPrice"], T, r["IV"], typ), axis=1)
+    df["Spread"] = np.where((df["ask"] > 0) & (df["bid"] > 0), df["ask"] - df["bid"], np.nan)
+    df["Contract Cost"] = df["lastPrice"] * 100
+    df["Score"] = df.apply(lambda r: score_contract(r, price), axis=1)
+
+    return df, days
+
+
+# =========================
+# JOURNAL
+# =========================
+def journal_columns():
+    return [
+        "Date/Time",
+        "Ticker",
+        "Trade Type",
+        "Strike",
+        "Expiration",
+        "Entry Price",
+        "Exit Price",
+        "Contracts",
+        "Profit/Loss",
+        "Win/Loss",
+    ]
+
+
+def load_journal() -> pd.DataFrame:
+    cols = journal_columns()
     try:
-        if webhook_url:
-            requests.post(webhook_url, json={"content": message}, timeout=5)
+        df = pd.read_csv(JOURNAL_FILE)
+        for col in cols:
+            if col not in df.columns:
+                df[col] = np.nan
+        return df[cols]
     except Exception:
-        pass
+        return pd.DataFrame(columns=cols)
 
 
-def send_telegram_alert(bot_token, chat_id, message):
-    try:
-        if bot_token and chat_id:
-            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-            requests.post(url, data={"chat_id": chat_id, "text": message}, timeout=5)
-    except Exception:
-        pass
+def save_journal(df: pd.DataFrame):
+    df.to_csv(JOURNAL_FILE, index=False)
 
 
-def scan_market(tickers):
-    rows = []
-
-    for symbol in tickers:
-        try:
-            d = load_data(symbol, "3mo", "1d")
-
-            if d.empty:
-                continue
-
-            _, sig = calculate_signal(d)
-
-            rows.append({
-                "Ticker": symbol,
-                "Price": round(sig["price"], 2),
-                "RSI": round(sig["rsi"], 1),
-                "Support": round(sig["support"], 2),
-                "Resistance": round(sig["resistance"], 2),
-                "Entry Low": round(sig["ideal_entry_low"], 2),
-                "Entry High": round(sig["ideal_entry_high"], 2),
-                "Exit Target": round(sig["bullish_exit"], 2),
-                "Stock Trade Score": sig["score"],
-                "Signal": sig["signal"],
-            })
-
-        except Exception:
-            pass
-
-    return pd.DataFrame(rows)
-
-
-# =========================================================
+# =========================
 # SIDEBAR
-# =========================================================
+# =========================
 with st.sidebar:
     st.header("⚙️ Settings")
 
-    auto_refresh = st.toggle("Auto-refresh", value=False)
-    refresh_seconds = st.selectbox("Refresh every", [30, 60, 120, 300], index=1)
+    period = st.selectbox("Chart Period", ["1mo", "3mo", "6mo", "1y"], index=2)
+    interval = st.selectbox("Interval", ["1d", "1h", "30m", "15m"], index=0)
 
     st.divider()
+    st.subheader("Option Filters")
 
-    st.subheader("🔔 Alerts")
-
-    alerts_enabled = st.toggle("Enable in-app alerts", value=True)
-    discord_webhook = st.text_input("Discord webhook URL", type="password", placeholder="Optional")
-    telegram_token = st.text_input("Telegram bot token", type="password", placeholder="Optional")
-    telegram_chat_id = st.text_input("Telegram chat ID", placeholder="Optional")
+    delta_min = st.slider("Min Delta", 0.00, 1.00, 0.00, 0.05)
+    delta_max = st.slider("Max Delta", 0.00, 1.00, 1.00, 0.05)
+    pop_min = st.slider("Min POP", 0.00, 1.00, 0.00, 0.05)
+    iv_min = st.slider("Min IV", 0.00, 2.00, 0.00, 0.05)
+    iv_max = st.slider("Max IV", 0.00, 2.00, 2.00, 0.05)
 
     st.divider()
-
-    st.subheader("📊 Option Filters")
-
-    delta_min = st.slider("Minimum Delta", 0.00, 1.00, 0.25, 0.05)
-    delta_max = st.slider("Maximum Delta", 0.00, 1.00, 0.85, 0.05)
-    pop_min = st.slider("Minimum Probability of Profit", 0.00, 1.00, 0.20, 0.05)
-    iv_min = st.slider("Minimum IV", 0.00, 2.00, 0.00, 0.05)
-    iv_max = st.slider("Maximum IV", 0.00, 2.00, 1.50, 0.05)
-
-if auto_refresh:
-    st.markdown(f'<meta http-equiv="refresh" content="{refresh_seconds}">', unsafe_allow_html=True)
+    st.caption("This tool is for decision support only, not financial advice.")
 
 
-# =========================================================
-# HEADER
-# =========================================================
-st.markdown('<div class="sticky-header">', unsafe_allow_html=True)
+# =========================
+# HEADER / TICKER SELECTION
+# =========================
+sp500_df = load_sp500_universe()
 
 st.title("📈 TradeEdge Pro")
 
-h1, h2, h3, h4 = st.columns([2, 2, 1, 1])
+h1, h2 = st.columns(2)
 
 with h1:
-    st.selectbox(
-        "Autocomplete stock search",
-        list(POPULAR_TICKERS.keys()),
-        key="selected_company"
+    selected_display = st.selectbox(
+        "S&P 500 Company Search",
+        sp500_df["Display"].tolist(),
+        index=0,
     )
 
 with h2:
-    st.text_input(
-        "Manual ticker entry",
-        placeholder="AAPL, TSLA, NVDA...",
-        key="manual_ticker"
+    manual_input = st.text_input(
+        "Manual Ticker or Company Name",
+        placeholder="Example: AAPL, BAC, Bank of America, Tesla",
     )
 
-with h3:
-    period = st.selectbox("Chart period", ["1mo", "3mo", "6mo", "1y", "2y"], index=2)
-
-with h4:
-    interval = st.selectbox("Interval", ["1d", "1h", "30m", "15m"], index=0)
-
-if st.session_state.manual_ticker.strip():
-    ticker = st.session_state.manual_ticker.upper().strip()
-else:
-    ticker = POPULAR_TICKERS[st.session_state.selected_company]
-
-st.session_state.ticker = ticker
-
-st.markdown(f"### Active ticker: `{ticker}`")
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-st.markdown('<div class="floating-reset">', unsafe_allow_html=True)
-st.button("🔄 Reset", key="floating_reset", on_click=reset_app)
-st.markdown('</div>', unsafe_allow_html=True)
+ticker = resolve_ticker(manual_input, selected_display, sp500_df)
+st.caption(f"Active ticker: **{ticker}**")
 
 
-# =========================================================
-# MAIN APP
-# =========================================================
+# =========================
+# LOAD MAIN DATA BEFORE DASHBOARD
+# =========================
+raw_data = load_data(ticker, period, interval)
+
+if raw_data.empty:
+    st.error(f"No price data found for {ticker}. Try another ticker or a longer chart period.")
+    st.stop()
+
 try:
-    raw_data = load_data(ticker, period, interval)
-
-    if raw_data.empty:
-        st.error("No data found. Try another ticker.")
-        st.stop()
-
     data, signal_data = calculate_signal(raw_data)
+except Exception as exc:
+    st.error(f"Could not calculate signal data for {ticker}.")
+    st.exception(exc)
+    st.stop()
 
-    price = signal_data["price"]
-    signal = signal_data["signal"]
-    trade_score = signal_data["score"]
+price = signal_data["price"]
+price_change, price_change_pct = get_price_change(data)
 
-    if alerts_enabled:
-        alert_message = f"{ticker}: {signal} | Stock Score {trade_score}/100 | Price ${price:,.2f}"
 
-        if signal != st.session_state.last_alert:
-            if "STRONG" in signal or "WATCH" in signal:
-                st.toast(f"🚨 {alert_message}", icon="🚀")
-                send_discord_alert(discord_webhook, alert_message)
-                send_telegram_alert(telegram_token, telegram_chat_id, alert_message)
+# =========================
+# TOP DASHBOARD
+# =========================
+m1, m2, m3, m4, m5, m6 = st.columns(6)
 
-            st.session_state.last_alert = signal
+m1.metric("Price", fmt_money(price), delta=fmt_money(price_change) if price_change is not None else None)
+m2.metric("Change %", fmt_pct(price_change_pct))
+m3.metric("RSI", f"{signal_data['rsi']:.1f}")
+m4.metric("Score", f"{signal_data['score']}/100")
+m5.metric("Support", fmt_money(signal_data["support"]))
+m6.metric("Resistance", fmt_money(signal_data["resistance"]))
 
-    m1, m2, m3, m4, m5, m6 = st.columns(6)
+signal = signal_data["signal"]
 
-    m1.metric("Price", f"${price:,.2f}")
-    m2.metric("RSI", f"{signal_data['rsi']:.1f}")
-    m3.metric("Stock Score", f"{trade_score}/100")
-    m4.metric("Support", f"${signal_data['support']:,.2f}")
-    m5.metric("Resistance", f"${signal_data['resistance']:,.2f}")
-    m6.metric("Entry Zone", f"${signal_data['ideal_entry_low']:,.2f} - ${signal_data['ideal_entry_high']:,.2f}")
+st.markdown(
+    f"""
+    <div class="signal-box" style="background:{signal_color(signal)};">
+        <div class="signal-title">{signal}</div>
+        <div class="signal-sub">Stock Trade Score: {signal_data['score']}/100 | VWAP: {fmt_money(signal_data['vwap'])}</div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-    if signal == "STRONG BUY CALL":
-        signal_color = "linear-gradient(135deg, #16a34a, #22c55e)"
-    elif signal == "BUY CALL WATCH":
-        signal_color = "linear-gradient(135deg, #2563eb, #38bdf8)"
-    elif signal == "STRONG BUY PUT":
-        signal_color = "linear-gradient(135deg, #dc2626, #ef4444)"
-    elif signal == "PUT WATCH":
-        signal_color = "linear-gradient(135deg, #ea580c, #f97316)"
-    else:
-        signal_color = "linear-gradient(135deg, #6b7280, #9ca3af)"
 
-    st.markdown(
-        f"""
-        <div class="signal-box" style="background: {signal_color}; color: white;">
-            <div class="signal-title">{signal}</div>
-            <div class="signal-subtitle">Stock Trade Score: {trade_score}/100</div>
-        </div>
-        """,
-        unsafe_allow_html=True
+tabs = st.tabs(["📊 Chart", "🧾 Options", "📓 Journal", "🔍 Scanner", "📰 News", "🏢 Info", "❓ Guide"])
+
+
+# =========================
+# CHART TAB
+# =========================
+with tabs[0]:
+    st.subheader("Chart with VWAP, Volume, RSI, Entry & Exit Levels")
+
+    selected_strike = st.number_input("Highlight Strike", min_value=0.0, value=0.0, step=1.0)
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Candlestick(
+            x=data.index,
+            open=data["Open"],
+            high=data["High"],
+            low=data["Low"],
+            close=data["Close"],
+            name="Price",
+        )
     )
 
-    tabs = st.tabs([
-        "📊 Chart",
-        "🧾 Options Chain",
-        "📓 Trading Journal",
-        "📉 Technical Breakdown",
-        "🔍 Scanner",
-        "📰 News",
-        "🏢 Company Info",
-        "❓ How To Use"
-    ])
+    fig.add_trace(
+        go.Bar(
+            x=data.index,
+            y=data["Volume"],
+            name="Volume",
+            yaxis="y2",
+            opacity=0.25,
+        )
+    )
 
-    # =====================================================
-    # CHART TAB
-    # =====================================================
-    with tabs[0]:
-        st.subheader("Chart with Volume, Support, Resistance, Entry Zone, Exit Lines")
+    fig.add_trace(go.Scatter(x=data.index, y=data["MA20"], name="20 MA", mode="lines"))
+    fig.add_trace(go.Scatter(x=data.index, y=data["MA50"], name="50 MA", mode="lines"))
+    fig.add_trace(go.Scatter(x=data.index, y=data["VWAP"], name="VWAP", mode="lines"))
 
-        selected_strike = st.number_input(
-            "Highlight chosen strike on chart",
-            min_value=0.0,
-            value=0.0,
-            step=1.0
+    fig.add_hline(
+        y=signal_data["support"],
+        line_dash="dash",
+        annotation_text=f"Support {fmt_money(signal_data['support'])}",
+    )
+    fig.add_hline(
+        y=signal_data["resistance"],
+        line_dash="dash",
+        annotation_text=f"Resistance {fmt_money(signal_data['resistance'])}",
+    )
+
+    fig.add_hrect(
+        y0=signal_data["entry_low"],
+        y1=signal_data["entry_high"],
+        opacity=0.18,
+        annotation_text=f"Bullish Entry {fmt_money(signal_data['entry_low'])} - {fmt_money(signal_data['entry_high'])}",
+        annotation_position="top left",
+    )
+
+    fig.add_hline(
+        y=signal_data["bullish_exit"],
+        line_dash="dot",
+        annotation_text=f"Bullish Exit {fmt_money(signal_data['bullish_exit'])}",
+    )
+    fig.add_hline(
+        y=signal_data["bearish_exit"],
+        line_dash="dot",
+        annotation_text=f"Bearish Exit {fmt_money(signal_data['bearish_exit'])}",
+    )
+
+    if selected_strike > 0:
+        fig.add_hline(
+            y=selected_strike,
+            line_dash="solid",
+            annotation_text=f"Strike {fmt_money(selected_strike)}",
         )
 
-        chart = make_chart(
-            data,
-            ticker,
-            signal_data,
-            selected_strike if selected_strike > 0 else None
-        )
+    fig.update_layout(
+        height=650,
+        xaxis_rangeslider_visible=False,
+        yaxis=dict(title="Price"),
+        yaxis2=dict(
+            title="Volume",
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            rangemode="tozero",
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        margin=dict(l=20, r=20, t=40, b=20),
+    )
 
-        st.plotly_chart(chart, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True)
 
-    # =====================================================
-    # OPTIONS TAB
-    # =====================================================
-    with tabs[1]:
-        st.subheader("Options Chain with Polygon + Yahoo Fallback")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.success(f"Bullish Entry: {fmt_money(signal_data['entry_low'])} - {fmt_money(signal_data['entry_high'])}")
+    c2.success(f"Bullish Exit: {fmt_money(signal_data['bullish_exit'])}")
+    c3.warning(f"Bearish Entry / Resistance: {fmt_money(signal_data['bearish_entry'])}")
+    c4.error(f"Bearish Exit / Stop: {fmt_money(signal_data['bearish_exit'])}")
 
-        polygon_df, polygon_expirations = load_polygon_options(ticker)
+    st.subheader("RSI Panel")
 
-        if not polygon_df.empty and polygon_expirations:
-            raw_options_df = polygon_df
-            expirations = polygon_expirations
-            data_source = "Polygon"
-            st.success("Using Polygon options snapshot data.")
+    rsi_fig = go.Figure()
+    rsi_fig.add_trace(go.Scatter(x=data.index, y=data["RSI"], mode="lines", name="RSI"))
+    rsi_fig.add_hline(y=70, line_dash="dash", annotation_text="Overbought 70")
+    rsi_fig.add_hline(y=30, line_dash="dash", annotation_text="Oversold 30")
+    rsi_fig.update_layout(
+        height=260,
+        paper_bgcolor="#ffffff",
+        plot_bgcolor="#ffffff",
+        margin=dict(l=20, r=20, t=20, b=20),
+    )
+    st.plotly_chart(rsi_fig, use_container_width=True)
+
+
+# =========================
+# OPTIONS TAB
+# =========================
+with tabs[1]:
+    st.subheader("Options Chain with Auto Best Contract")
+
+    expirations = get_options_expirations(ticker)
+
+    if not expirations:
+        st.error("No options available for this ticker.")
+    else:
+        exp = st.selectbox("Expiration", expirations)
+        typ = st.radio("Type", ["CALL", "PUT"], horizontal=True)
+
+        opt_df = load_option_chain(ticker, exp, typ)
+
+        if opt_df.empty:
+            st.warning("No contracts found.")
         else:
-            yahoo_df, yahoo_expirations = load_yahoo_options(ticker)
-            raw_options_df = yahoo_df
-            expirations = yahoo_expirations
-            data_source = "Yahoo fallback"
-            st.warning("Polygon options unavailable or limited. Using Yahoo fallback.")
+            opt_df, dte = prepare_options(opt_df, price, exp, typ)
 
-        if raw_options_df.empty or not expirations:
-            st.error("No options data available for this ticker. Try refreshing, changing ticker, or running locally.")
-        else:
-            e1, e2 = st.columns([2, 1])
-
-            with e1:
-                selected_expiration = st.selectbox("Expiration", expirations)
-
-            with e2:
-                option_type = st.radio("Type", ["CALL", "PUT"], horizontal=True)
-
-            options_df = prepare_options(
-                raw_options_df,
-                selected_expiration,
-                option_type,
-                price,
-                data_source
-            )
-
-            if options_df.empty:
-                st.warning("No contracts found for this expiration and option type.")
-            else:
-                days_to_expiration = max(
-                    (datetime.strptime(selected_expiration, "%Y-%m-%d").date() - date.today()).days,
-                    1
-                )
-
-                options_df["Option Score"] = options_df.apply(
-                    lambda row: score_option(row, price, delta_min, delta_max, pop_min),
-                    axis=1
-                )
-
-                filtered = options_df.copy()
-
-                filtered = filtered[
-                    filtered["Delta"].abs().between(delta_min, delta_max, inclusive="both")
-                    | filtered["Delta"].isna()
-                ]
-
-                filtered = filtered[
-                    (filtered["Probability of Profit"] >= pop_min)
-                    | filtered["Probability of Profit"].isna()
-                ]
-
-                filtered = filtered[
-                    filtered["Clean IV"].between(iv_min, iv_max, inclusive="both")
-                ]
-
-                filtered = filtered.sort_values("Option Score", ascending=False)
-
-                if filtered.empty:
-                    st.warning("No contracts matched your filters. Showing all contracts instead.")
-                    filtered = options_df.copy().sort_values("Option Score", ascending=False)
-
-                best_contract = choose_best_contract(filtered)
-
-                g1, g2, g3, g4 = st.columns(4)
-
-                g1.metric("IV Rank", safe_format(calculate_iv_rank(filtered), "{:.1f}%"))
-                g2.metric("Days to Expiration", days_to_expiration)
-                g3.metric("Contracts Shown", len(filtered))
-                g4.metric("Data Source", data_source)
-
-                if best_contract is not None:
-                    st.success(
-                        f"Best {option_type}: Strike ${safe_format(best_contract['strike'])} | "
-                        f"Last ${safe_format(best_contract['lastPrice'])} | "
-                        f"Cost ${safe_format(best_contract['Total Contract Cost'])} | "
-                        f"Delta {safe_format(best_contract['Delta'])} | "
-                        f"Gamma {safe_format(best_contract['Gamma'], '{:.4f}')} | "
-                        f"Theta {safe_format(best_contract['Theta'], '{:.4f}')} | "
-                        f"Vega {safe_format(best_contract['Vega'], '{:.4f}')} | "
-                        f"POP {safe_format(best_contract['Probability of Profit'], '{:.1%}')} | "
-                        f"Option Score {safe_format(best_contract['Option Score'], '{:.0f}')}/100"
-                    )
-
-                display_cols = [
-                    "contractSymbol",
-                    "strike",
-                    "lastPrice",
-                    "bid",
-                    "ask",
-                    "Spread",
-                    "volume",
-                    "openInterest",
-                    "impliedVolatility",
-                    "Clean IV",
-                    "IV Rank",
-                    "Delta",
-                    "Gamma",
-                    "Theta",
-                    "Vega",
-                    "Probability of Profit",
-                    "Total Contract Cost",
-                    "Option Score"
-                ]
-
-                for col in display_cols:
-                    if col not in filtered.columns:
-                        filtered[col] = np.nan
-
-                st.dataframe(filtered[display_cols], use_container_width=True, height=560)
-
-    # =====================================================
-    # TRADING JOURNAL TAB
-    # =====================================================
-    with tabs[2]:
-        st.subheader("📓 Trading Journal")
-
-        journal_df = load_journal()
-
-        with st.form("journal_form"):
-            c1, c2, c3 = st.columns(3)
-
-            with c1:
-                journal_ticker = st.text_input("Ticker", value=ticker)
-                trade_type = st.selectbox("Trade Type", ["CALL", "PUT", "SPREAD"])
-                strike = st.number_input("Strike", min_value=0.0, step=1.0)
-
-            with c2:
-                expiration = st.date_input("Expiration")
-                entry_price = st.number_input("Entry Price", min_value=0.0, step=0.01)
-                exit_price = st.number_input("Exit Price", min_value=0.0, step=0.01)
-
-            with c3:
-                contracts = st.number_input("Contracts", min_value=1, value=1, step=1)
-                submitted = st.form_submit_button("Add Trade")
-
-            if submitted:
-                profit_loss = calculate_pl(entry_price, exit_price, contracts)
-                win_loss = "WIN" if profit_loss > 0 else "LOSS" if profit_loss < 0 else "BREAKEVEN"
-
-                new_trade = pd.DataFrame([{
-                    "Date/Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "Ticker": journal_ticker.upper().strip(),
-                    "Trade Type": trade_type,
-                    "Strike": strike,
-                    "Expiration": expiration.strftime("%Y-%m-%d"),
-                    "Entry Price": entry_price,
-                    "Exit Price": exit_price,
-                    "Contracts": contracts,
-                    "Profit/Loss": profit_loss,
-                    "Win/Loss": win_loss
-                }])
-
-                journal_df = pd.concat([journal_df, new_trade], ignore_index=True)
-                save_journal(journal_df)
-                st.success("Trade added to journal.")
-
-        st.divider()
-
-        if journal_df.empty:
-            st.info("No journal entries yet.")
-        else:
-            journal_df["Profit/Loss"] = pd.to_numeric(journal_df["Profit/Loss"], errors="coerce").fillna(0)
-
-            total_trades = len(journal_df)
-            wins = len(journal_df[journal_df["Win/Loss"] == "WIN"])
-            losses = len(journal_df[journal_df["Win/Loss"] == "LOSS"])
-            breakevens = len(journal_df[journal_df["Win/Loss"] == "BREAKEVEN"])
-            total_pl = journal_df["Profit/Loss"].sum()
-            win_rate = (wins / total_trades) * 100 if total_trades else 0
-
-            j1, j2, j3, j4, j5 = st.columns(5)
-
-            j1.metric("Total Trades", total_trades)
-            j2.metric("Wins", wins)
-            j3.metric("Losses", losses)
-            j4.metric("Breakevens", breakevens)
-            j5.metric("Win Rate", f"{win_rate:.1f}%")
-
-            st.metric("Total Profit / Loss", f"${total_pl:,.2f}")
-
-            st.dataframe(journal_df, use_container_width=True, height=420)
-
-            csv = journal_df.to_csv(index=False).encode("utf-8")
-
-            st.download_button(
-                label="⬇️ Download Trading Journal CSV",
-                data=csv,
-                file_name="trade_journal.csv",
-                mime="text/csv"
-            )
-
-            if st.button("Clear Journal"):
-                empty_df = pd.DataFrame(columns=journal_df.columns)
-                save_journal(empty_df)
-                st.warning("Journal cleared. Refresh the app.")
-
-    # =====================================================
-    # TECHNICAL TAB
-    # =====================================================
-    with tabs[3]:
-        st.subheader("Technical Breakdown")
-
-        breakdown = pd.DataFrame({
-            "Metric": [
-                "Current Price",
-                "RSI",
-                "MACD",
-                "MACD Signal",
-                "20-Day Moving Average",
-                "50-Day Moving Average",
-                "Support",
-                "Resistance",
-                "Ideal Entry Low",
-                "Ideal Entry High",
-                "Bullish Exit Target",
-                "Bearish Stop / Exit",
-                "Stock Trade Score",
-                "Signal"
-            ],
-            "Value": [
-                f"${signal_data['price']:,.2f}",
-                f"{signal_data['rsi']:.1f}",
-                f"{signal_data['macd']:.4f}",
-                f"{signal_data['macd_signal']:.4f}",
-                f"${signal_data['ma20']:,.2f}",
-                f"${signal_data['ma50']:,.2f}",
-                f"${signal_data['support']:,.2f}",
-                f"${signal_data['resistance']:,.2f}",
-                f"${signal_data['ideal_entry_low']:,.2f}",
-                f"${signal_data['ideal_entry_high']:,.2f}",
-                f"${signal_data['bullish_exit']:,.2f}",
-                f"${signal_data['bearish_exit']:,.2f}",
-                f"{signal_data['score']}/100",
-                signal_data["signal"]
+            filtered = opt_df.copy()
+            filtered = filtered[
+                filtered["Delta"].abs().between(delta_min, delta_max, inclusive="both")
+                | filtered["Delta"].isna()
             ]
-        })
+            filtered = filtered[(filtered["POP"] >= pop_min) | filtered["POP"].isna()]
+            filtered = filtered[filtered["IV"].between(iv_min, iv_max, inclusive="both")]
+            filtered = filtered.sort_values("Score", ascending=False)
 
-        st.dataframe(breakdown, use_container_width=True)
+            if filtered.empty:
+                st.warning("No contracts matched filters. Showing full chain.")
+                filtered = opt_df.sort_values("Score", ascending=False)
 
-    # =====================================================
-    # SCANNER TAB
-    # =====================================================
-    with tabs[4]:
-        st.subheader("Multi-Stock Scanner")
+            best = filtered.iloc[0]
 
-        scan_input = st.text_area("Tickers to scan", value=", ".join(DEFAULT_SCAN_TICKERS), height=90)
+            o1, o2, o3, o4 = st.columns(4)
+            o1.metric("DTE", dte)
+            o2.metric("Contracts", len(filtered))
+            o3.metric("Best Score", f"{best['Score']:.0f}/100")
+            o4.metric("Best Cost", fmt_money(best["Contract Cost"]))
 
-        tickers_to_scan = [
-            x.strip().upper()
-            for x in scan_input.replace("\n", ",").split(",")
-            if x.strip()
-        ]
+            st.success(
+                f"Best {typ}: Strike {fmt_money(best['strike'])} | "
+                f"Last {fmt_money(best['lastPrice'])} | "
+                f"Delta {safe_num(best['Delta'], 0):.2f} | "
+                f"POP {fmt_pct(best['POP'])} | "
+                f"Score {best['Score']:.0f}/100"
+            )
 
-        if st.button("Run Scanner"):
-            scanner_df = scan_market(tickers_to_scan)
+            display_cols = [
+                "contractSymbol",
+                "strike",
+                "lastPrice",
+                "Contract Cost",
+                "bid",
+                "ask",
+                "Spread",
+                "volume",
+                "openInterest",
+                "IV",
+                "Delta",
+                "Gamma",
+                "Theta",
+                "Vega",
+                "POP",
+                "Score",
+            ]
 
-            if scanner_df.empty:
-                st.warning("Scanner did not return results.")
-            else:
-                scanner_df = scanner_df.sort_values("Stock Trade Score", ascending=False)
-                st.dataframe(scanner_df, use_container_width=True, height=500)
+            display_cols = [c for c in display_cols if c in filtered.columns]
+            st.dataframe(filtered[display_cols], use_container_width=True, height=560)
 
-    # =====================================================
-    # NEWS TAB
-    # =====================================================
-    with tabs[5]:
-        st.subheader("Clickable News Links")
 
-        try:
-            news = yf.Ticker(ticker).news or []
-        except Exception:
-            news = []
+# =========================
+# JOURNAL TAB
+# =========================
+with tabs[2]:
+    st.subheader("Trading Journal")
 
-        if not news:
-            st.warning("No news found.")
+    journal = load_journal()
+
+    with st.form("journal_form"):
+        a, b, c = st.columns(3)
+
+        with a:
+            j_ticker = st.text_input("Ticker", ticker)
+            j_type = st.selectbox("Trade Type", ["CALL", "PUT", "SPREAD", "STOCK"])
+            j_strike = st.number_input("Strike", min_value=0.0, step=1.0)
+
+        with b:
+            j_exp = st.date_input("Expiration")
+            entry = st.number_input("Entry Price", min_value=0.0, step=0.01)
+            exit_price = st.number_input("Exit Price", min_value=0.0, step=0.01)
+
+        with c:
+            contracts = st.number_input("Contracts/Shares", min_value=1, value=1, step=1)
+            submit = st.form_submit_button("Add Trade")
+
+        if submit:
+            multiplier = 100 if j_type in ["CALL", "PUT", "SPREAD"] else 1
+            pnl = round((exit_price - entry) * multiplier * int(contracts), 2)
+            result = "WIN" if pnl > 0 else "LOSS" if pnl < 0 else "BREAKEVEN"
+
+            new = pd.DataFrame(
+                [
+                    {
+                        "Date/Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Ticker": j_ticker.upper().strip(),
+                        "Trade Type": j_type,
+                        "Strike": j_strike,
+                        "Expiration": j_exp.strftime("%Y-%m-%d"),
+                        "Entry Price": entry,
+                        "Exit Price": exit_price,
+                        "Contracts": int(contracts),
+                        "Profit/Loss": pnl,
+                        "Win/Loss": result,
+                    }
+                ]
+            )
+
+            journal = pd.concat([journal, new], ignore_index=True)
+            save_journal(journal)
+            st.success("Trade added.")
+
+    if journal.empty:
+        st.info("No journal entries yet.")
+    else:
+        journal["Profit/Loss"] = pd.to_numeric(journal["Profit/Loss"], errors="coerce").fillna(0)
+
+        total = len(journal)
+        wins = len(journal[journal["Win/Loss"] == "WIN"])
+        losses = len(journal[journal["Win/Loss"] == "LOSS"])
+        win_rate = wins / total * 100 if total else 0
+        total_pnl = journal["Profit/Loss"].sum()
+
+        j1, j2, j3, j4, j5 = st.columns(5)
+        j1.metric("Trades", total)
+        j2.metric("Wins", wins)
+        j3.metric("Losses", losses)
+        j4.metric("Win Rate", f"{win_rate:.1f}%")
+        j5.metric("Total P/L", fmt_money(total_pnl))
+
+        st.dataframe(journal, use_container_width=True)
+        st.download_button(
+            "Download CSV",
+            journal.to_csv(index=False),
+            "trade_journal.csv",
+            "text/csv",
+        )
+
+        if st.button("Clear Journal"):
+            save_journal(pd.DataFrame(columns=journal_columns()))
+            st.warning("Journal cleared. Refresh app.")
+
+
+# =========================
+# SCANNER TAB
+# =========================
+with tabs[3]:
+    st.subheader("Multi-Stock Scanner")
+
+    scan_text = st.text_area("Tickers", SCAN_DEFAULT)
+    scan_list = [x.strip().upper() for x in scan_text.replace("\n", ",").split(",") if x.strip()]
+
+    if st.button("Run Scanner"):
+        rows = []
+
+        with st.spinner("Scanning tickers..."):
+            for symbol in scan_list:
+                try:
+                    d = load_data(symbol, "3mo", "1d")
+                    if d.empty:
+                        continue
+
+                    _, sig = calculate_signal(d)
+
+                    rows.append(
+                        {
+                            "Ticker": symbol,
+                            "Price": round(sig["price"], 2),
+                            "RSI": round(sig["rsi"], 1),
+                            "VWAP": round(sig["vwap"], 2),
+                            "Score": sig["score"],
+                            "Signal": sig["signal"],
+                            "Entry Low": round(sig["entry_low"], 2),
+                            "Entry High": round(sig["entry_high"], 2),
+                            "Exit": round(sig["bullish_exit"], 2),
+                        }
+                    )
+                except Exception:
+                    continue
+
+        if rows:
+            scan_df = pd.DataFrame(rows).sort_values("Score", ascending=False)
+            st.dataframe(scan_df, use_container_width=True)
         else:
-            for item in news[:12]:
-                title = item.get("title") or item.get("content", {}).get("title", "No title")
-                link = item.get("link") or item.get("content", {}).get("canonicalUrl", {}).get("url", "")
-                publisher = item.get("publisher") or item.get("content", {}).get("provider", {}).get("displayName", "Unknown")
-                publish_time = item.get("providerPublishTime") or item.get("content", {}).get("pubDate", None)
+            st.warning("Scanner returned no results.")
 
-                if isinstance(publish_time, int):
-                    news_date = datetime.fromtimestamp(publish_time).strftime("%Y-%m-%d")
-                elif isinstance(publish_time, str):
-                    news_date = publish_time[:10]
-                else:
-                    news_date = "N/A"
 
-                if link:
-                    st.markdown(
-                        f"""
-                        <div class="news-card">
-                        <b><a href="{link}" target="_blank">{title}</a></b><br>
-                        {publisher} | {news_date}
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
-                else:
-                    st.markdown(
-                        f"""
-                        <div class="news-card">
-                        <b>{title}</b><br>
-                        {publisher} | {news_date}
-                        </div>
-                        """,
-                        unsafe_allow_html=True
-                    )
+# =========================
+# NEWS TAB
+# =========================
+with tabs[4]:
+    st.subheader("News")
 
-    # =====================================================
-    # COMPANY INFO TAB
-    # =====================================================
-    with tabs[6]:
-        st.subheader("Company Info")
+    news = load_news(ticker)
 
-        info = load_info(ticker)
+    if not news:
+        st.warning("No news found.")
+    else:
+        for item in news[:10]:
+            title = item.get("title") or item.get("content", {}).get("title", "No title")
+            link = item.get("link") or item.get("content", {}).get("canonicalUrl", {}).get("url", "")
 
-        name = info.get("longName", ticker)
-        sector = info.get("sector", "N/A")
-        industry = info.get("industry", "N/A")
-        market_cap = info.get("marketCap", None)
-        summary = info.get("longBusinessSummary", "No company summary available.")
+            if link:
+                st.markdown(f"### [{title}]({link})")
+            else:
+                st.write(title)
 
-        st.write(f"**Company:** {name}")
-        st.write(f"**Sector:** {sector}")
-        st.write(f"**Industry:** {industry}")
 
-        if market_cap:
-            st.write(f"**Market Cap:** ${market_cap:,.0f}")
+# =========================
+# INFO TAB
+# =========================
+with tabs[5]:
+    st.subheader("Company Info")
 
-        st.write(summary)
+    info = load_info(ticker)
 
-    # =====================================================
-    # HOW TO USE TAB
-    # =====================================================
-    with tabs[7]:
-        st.subheader("How To Use TradeEdge Pro")
+    company_name = info.get("longName", ticker)
+    sector = info.get("sector", "N/A")
+    industry = info.get("industry", "N/A")
+    market_cap = info.get("marketCap")
+    summary = info.get("longBusinessSummary", "No company summary available.")
 
-        st.markdown("""
-        1. Choose a ticker or type one manually.
-        2. Check the main stock signal and stock trade score.
-        3. Review the chart, support, resistance, ideal entry zone, and exit target.
-        4. Go to the options chain.
-        5. Filter by delta, probability of profit, and IV.
-        6. Track trades in the Trading Journal.
-        7. Download your journal as a CSV.
+    i1, i2, i3 = st.columns(3)
+    i1.metric("Company", company_name)
+    i2.metric("Sector", sector)
+    i3.metric("Industry", industry)
 
-        This is a decision-support tool, not financial advice.
-        """)
+    if market_cap:
+        st.metric("Market Cap", f"${market_cap:,.0f}")
 
-    st.caption(f"Last updated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.markdown("### Business Summary")
+    st.write(summary)
 
-except Exception as e:
-    st.error("Something went wrong.")
-    st.write(e)
+
+# =========================
+# GUIDE TAB
+# =========================
+with tabs[6]:
+    st.subheader("How To Use")
+    st.markdown(
+        """
+        1. Choose an S&P 500 company or type any ticker/company name manually.
+        2. Review the score and signal at the top.
+        3. Use the chart for VWAP, support, resistance, entry, exit, and volume.
+        4. Use the options tab to compare contracts by liquidity, spread, delta, POP, and score.
+        5. Track every trade in the journal.
+        6. Download your journal CSV.
+
+        **Important:** This is a decision-support tool, not financial advice.
+        """
+    )
