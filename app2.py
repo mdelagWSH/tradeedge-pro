@@ -874,6 +874,22 @@ def load_journal() -> pd.DataFrame:
         if df["Trade ID"].isna().all() or df["Trade ID"].isna().any():
             df["Trade ID"] = range(1, len(df) + 1)
 
+        # Prevent pandas dtype errors when writing text into blank journal columns.
+        text_cols = [
+            "Status",
+            "Entry Date/Time",
+            "Exit Date/Time",
+            "Ticker",
+            "Trade Type",
+            "Expiration",
+            "Win/Loss",
+            "Notes",
+        ]
+
+        for text_col in text_cols:
+            if text_col in df.columns:
+                df[text_col] = df[text_col].astype("object")
+
         return df[cols]
 
     except Exception:
@@ -1345,6 +1361,12 @@ with tabs[2]:
 
                     if close_notes.strip():
                         combined_notes = (existing_notes + "\nExit: " + close_notes.strip()).strip()
+
+                    # Cast text columns before assigning strings.
+                    journal["Status"] = journal["Status"].astype("object")
+                    journal["Exit Date/Time"] = journal["Exit Date/Time"].astype("object")
+                    journal["Win/Loss"] = journal["Win/Loss"].astype("object")
+                    journal["Notes"] = journal["Notes"].astype("object")
 
                     journal.loc[idx, "Status"] = "CLOSED"
                     journal.loc[idx, "Exit Date/Time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
