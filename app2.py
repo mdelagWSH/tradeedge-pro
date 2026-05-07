@@ -127,6 +127,59 @@ def fmt_money(x) -> str:
     except Exception:
         return "N/A"
 
+def fmt_money_short(x):
+    try:
+        x = float(x)
+
+        if abs(x) >= 999_500:
+            return f"${x / 1_000_000:.1f}M"
+
+        if abs(x) >= 1_000:
+            return f"${x / 1_000:.1f}K"
+
+        return f"${x:,.0f}"
+
+    except Exception:
+        return "N/A"
+
+
+def pnl_color(x):
+    try:
+        x = float(x)
+        if x > 0:
+            return "#16a34a"
+        if x < 0:
+            return "#dc2626"
+        return "#6b7280"
+    except Exception:
+        return "#6b7280"
+
+
+def pnl_metric_card(label, value):
+    color = pnl_color(value)
+    display_value = fmt_money_short(value)
+
+    st.markdown(
+        f"""
+        <div style="
+            background: white;
+            border: 1px solid #d1d5db;
+            border-radius: 16px;
+            padding: 18px;
+            min-height: 108px;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.08);
+        ">
+            <div style="font-size: 16px; color: #374151; margin-bottom: 18px;">
+                {label}
+            </div>
+            <div style="font-size: 42px; font-weight: 700; color: {color}; line-height: 1;">
+                {display_value}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 def fmt_number(x) -> str:
     try:
@@ -1427,9 +1480,22 @@ with tabs[2]:
         j3.metric("Losses", losses)
         j4.metric("Breakeven", breakevens)
         j5.metric("Win Rate", f"{win_rate:.1f}%")
-        j6.metric("Total P/L", fmt_money(total_pnl))
+        with j6:
+            pnl_metric_card("Total P/L", total_pnl)
 
-        st.dataframe(closed_trades, use_container_width=True, height=360)
+        try:
+            styled_closed = closed_trades.style.apply(
+                lambda col: [
+                    "color: #16a34a; font-weight: 700;" if float(v) > 0 else
+                    "color: #dc2626; font-weight: 700;" if float(v) < 0 else
+                    "color: #6b7280;"
+                    for v in col
+                ] if col.name == "Profit/Loss" else ["" for _ in col],
+                axis=0,
+            )
+            st.dataframe(styled_closed, use_container_width=True, height=360)
+        except Exception:
+            st.dataframe(closed_trades, use_container_width=True, height=360)
 
     st.divider()
 
