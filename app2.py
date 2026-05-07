@@ -838,7 +838,10 @@ def prepare_options(df: pd.DataFrame, price: float, expiration: str, typ: str):
 # =========================
 def journal_columns():
     return [
-        "Date/Time",
+        "Trade ID",
+        "Status",
+        "Entry Date/Time",
+        "Exit Date/Time",
         "Ticker",
         "Trade Type",
         "Strike",
@@ -848,6 +851,12 @@ def journal_columns():
         "Contracts",
         "Profit/Loss",
         "Win/Loss",
+        "Real POP %",
+        "Chance ITM %",
+        "Touch %",
+        "Delta",
+        "Trade Rank",
+        "Notes",
     ]
 
 
@@ -855,16 +864,62 @@ def load_journal() -> pd.DataFrame:
     cols = journal_columns()
     try:
         df = pd.read_csv(JOURNAL_FILE)
+
         for col in cols:
             if col not in df.columns:
                 df[col] = np.nan
+
+        df["Trade ID"] = pd.to_numeric(df["Trade ID"], errors="coerce")
+
+        if df["Trade ID"].isna().all() or df["Trade ID"].isna().any():
+            df["Trade ID"] = range(1, len(df) + 1)
+
         return df[cols]
+
     except Exception:
         return pd.DataFrame(columns=cols)
 
 
 def save_journal(df: pd.DataFrame):
     df.to_csv(JOURNAL_FILE, index=False)
+
+
+def next_trade_id(journal: pd.DataFrame) -> int:
+    try:
+        if journal.empty or "Trade ID" not in journal.columns:
+            return 1
+        ids = pd.to_numeric(journal["Trade ID"], errors="coerce").dropna()
+        if ids.empty:
+            return 1
+        return int(ids.max()) + 1
+    except Exception:
+        return 1
+
+
+def calc_trade_pnl(trade_type, entry_price, exit_price, contracts):
+    try:
+        trade_type = str(trade_type).upper().strip()
+        entry_price = float(entry_price)
+        exit_price = float(exit_price)
+        contracts = int(contracts)
+
+        multiplier = 100 if trade_type in ["CALL", "PUT", "SPREAD"] else 1
+        return round((exit_price - entry_price) * multiplier * contracts, 2)
+
+    except Exception:
+        return 0.0
+
+
+def trade_result_label(pnl):
+    try:
+        pnl = float(pnl)
+        if pnl > 0:
+            return "WIN"
+        if pnl < 0:
+            return "LOSS"
+        return "BREAKEVEN"
+    except Exception:
+        return "BREAKEVEN"
 
 
 # =========================
@@ -1190,79 +1245,160 @@ with tabs[2]:
 
     journal = load_journal()
 
-    with st.form("journal_form"):
+    st.markdown("### Log New Entry")
+
+    with st.form("journal_entry_form"):
         a, b, c = st.columns(3)
 
         with a:
             j_ticker = st.text_input("Ticker", ticker)
             j_type = st.selectbox("Trade Type", ["CALL", "PUT", "SPREAD", "STOCK"])
-            j_strike = st.number_input("Strike", min_value=0.0, step=1.0)
+            j_strike = st.number_input("Strike", min_value=0.0, step=0.5)
 
         with b:
             j_exp = st.date_input("Expiration")
             entry = st.number_input("Entry Price", min_value=0.0, step=0.01)
-            exit_price = st.number_input("Exit Price", min_value=0.0, step=0.01)
+            contracts = st.number_input("Contracts/Shares", min_value=1, value=1, step=1)
 
         with c:
-            contracts = st.number_input("Contracts/Shares", min_value=1, value=1, step=1)
-            submit = st.form_submit_button("Add Trade")
+            j_real_pop = st.number_input("Real POP %", min_value=0.0, max_value=100.0, value=0.0, step=0.1)
+            j_touch = st.number_input("Touch %", min_value=0.0, max_value=100.0, value=0.0, step=0.1)
+            j_delta = st.number_input("Delta", min_value=-1.0, max_value=1.0, value=0.0, step=0.01)
 
-        if submit:
-            multiplier = 100 if j_type in ["CALL", "PUT", "SPREAD"] else 1
-            pnl = round((exit_price - entry) * multiplier * int(contracts), 2)
-            result = "WIN" if pnl > 0 else "LOSS" if pnl < 0 else "BREAKEVEN"
+        j_rank = st.number_input("Trade Rank", min_value=0, max_value=100, value=0, step=1)
+        j_notes = st.text_area("Entry Notes", placeholder="Why did you take this trade?")
+        submit_entry = st.form_submit_button("Log Entry as OPEN")
 
+        if submit_entry:
             new = pd.DataFrame(
                 [
                     {
-                        "Date/Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Trade ID": next_trade_id(journal),
+                        "Status": "OPEN",
+                        "Entry Date/Time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Exit Date/Time": "",
                         "Ticker": j_ticker.upper().strip(),
                         "Trade Type": j_type,
                         "Strike": j_strike,
                         "Expiration": j_exp.strftime("%Y-%m-%d"),
                         "Entry Price": entry,
-                        "Exit Price": exit_price,
+                        "Exit Price": np.nan,
                         "Contracts": int(contracts),
-                        "Profit/Loss": pnl,
-                        "Win/Loss": result,
+                        "Profit/Loss": np.nan,
+                        "Win/Loss": "",
+                        "Real POP %": j_real_pop,
+                        "Chance ITM %": np.nan,
+                        "Touch %": j_touch,
+                        "Delta": j_delta,
+                        "Trade Rank": j_rank,
+                        "Notes": j_notes,
                     }
                 ]
             )
 
             journal = pd.concat([journal, new], ignore_index=True)
             save_journal(journal)
-            st.success("Trade added.")
+            st.success("Entry logged as OPEN. Refresh if it does not appear immediately.")
 
-    if journal.empty:
-        st.info("No journal entries yet.")
+    st.divider()
+
+    open_trades = journal[journal["Status"].astype(str).str.upper() == "OPEN"].copy()
+    closed_trades = journal[journal["Status"].astype(str).str.upper() == "CLOSED"].copy()
+
+    st.markdown("### Open Positions")
+
+    if open_trades.empty:
+        st.info("No open positions.")
     else:
-        journal["Profit/Loss"] = pd.to_numeric(journal["Profit/Loss"], errors="coerce").fillna(0)
+        st.dataframe(open_trades, use_container_width=True, height=260)
 
-        total = len(journal)
-        wins = len(journal[journal["Win/Loss"] == "WIN"])
-        losses = len(journal[journal["Win/Loss"] == "LOSS"])
+        st.markdown("### Close a Position")
+
+        open_ids = open_trades["Trade ID"].astype(int).tolist()
+
+        with st.form("close_trade_form"):
+            close_id = st.selectbox("Select Open Trade ID", open_ids)
+            exit_price = st.number_input("Exit Price", min_value=0.0, step=0.01)
+            close_notes = st.text_area("Exit Notes", placeholder="Why did you exit?")
+            submit_close = st.form_submit_button("Close Trade and Calculate P/L")
+
+            if submit_close:
+                idx_list = journal.index[pd.to_numeric(journal["Trade ID"], errors="coerce") == int(close_id)].tolist()
+
+                if not idx_list:
+                    st.error("Could not find that trade ID.")
+                else:
+                    idx = idx_list[0]
+                    trade = journal.loc[idx]
+
+                    pnl = calc_trade_pnl(
+                        trade.get("Trade Type"),
+                        trade.get("Entry Price"),
+                        exit_price,
+                        trade.get("Contracts"),
+                    )
+
+                    result = trade_result_label(pnl)
+
+                    existing_notes = "" if pd.isna(trade.get("Notes")) else str(trade.get("Notes"))
+                    combined_notes = existing_notes
+
+                    if close_notes.strip():
+                        combined_notes = (existing_notes + "\nExit: " + close_notes.strip()).strip()
+
+                    journal.loc[idx, "Status"] = "CLOSED"
+                    journal.loc[idx, "Exit Date/Time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    journal.loc[idx, "Exit Price"] = exit_price
+                    journal.loc[idx, "Profit/Loss"] = pnl
+                    journal.loc[idx, "Win/Loss"] = result
+                    journal.loc[idx, "Notes"] = combined_notes
+
+                    save_journal(journal)
+
+                    st.success(f"Trade closed: {result} | P/L: {fmt_money(pnl)}")
+
+    st.divider()
+
+    st.markdown("### Closed Trade Performance")
+
+    if closed_trades.empty:
+        st.info("No closed trades yet.")
+    else:
+        closed_trades["Profit/Loss"] = pd.to_numeric(closed_trades["Profit/Loss"], errors="coerce").fillna(0)
+
+        total = len(closed_trades)
+        wins = len(closed_trades[closed_trades["Win/Loss"] == "WIN"])
+        losses = len(closed_trades[closed_trades["Win/Loss"] == "LOSS"])
+        breakevens = len(closed_trades[closed_trades["Win/Loss"] == "BREAKEVEN"])
         win_rate = wins / total * 100 if total else 0
-        total_pnl = journal["Profit/Loss"].sum()
+        total_pnl = closed_trades["Profit/Loss"].sum()
 
-        j1, j2, j3, j4, j5 = st.columns(5)
-        j1.metric("Trades", total)
+        j1, j2, j3, j4, j5, j6 = st.columns(6)
+        j1.metric("Closed Trades", total)
         j2.metric("Wins", wins)
         j3.metric("Losses", losses)
-        j4.metric("Win Rate", f"{win_rate:.1f}%")
-        j5.metric("Total P/L", fmt_money(total_pnl))
+        j4.metric("Breakeven", breakevens)
+        j5.metric("Win Rate", f"{win_rate:.1f}%")
+        j6.metric("Total P/L", fmt_money(total_pnl))
 
-        st.dataframe(journal, use_container_width=True)
+        st.dataframe(closed_trades, use_container_width=True, height=360)
+
+    st.divider()
+
+    if not journal.empty:
+        st.markdown("### Full Journal")
+        st.dataframe(journal, use_container_width=True, height=300)
+
         st.download_button(
-            "Download CSV",
+            "Download Journal CSV",
             journal.to_csv(index=False),
             "trade_journal.csv",
             "text/csv",
         )
 
-        if st.button("Clear Journal"):
+        if st.button("Clear Entire Journal"):
             save_journal(pd.DataFrame(columns=journal_columns()))
             st.warning("Journal cleared. Refresh app.")
-
 
 # =========================
 # SCANNER TAB
