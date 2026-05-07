@@ -890,6 +890,8 @@ def load_journal() -> pd.DataFrame:
             if text_col in df.columns:
                 df[text_col] = df[text_col].astype("object")
 
+        df = normalize_journal_dtypes(df)
+
         return df[cols]
 
     except Exception:
@@ -898,6 +900,49 @@ def load_journal() -> pd.DataFrame:
 
 def save_journal(df: pd.DataFrame):
     df.to_csv(JOURNAL_FILE, index=False)
+
+
+def normalize_journal_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Keeps journal columns writable on Streamlit Cloud.
+    Pandas can infer blank columns as numeric, then crash when text/timestamps are assigned.
+    """
+    df = df.copy()
+
+    text_cols = [
+        "Status",
+        "Entry Date/Time",
+        "Exit Date/Time",
+        "Ticker",
+        "Trade Type",
+        "Expiration",
+        "Win/Loss",
+        "Notes",
+    ]
+
+    numeric_cols = [
+        "Trade ID",
+        "Strike",
+        "Entry Price",
+        "Exit Price",
+        "Contracts",
+        "Profit/Loss",
+        "Real POP %",
+        "Chance ITM %",
+        "Touch %",
+        "Delta",
+        "Trade Rank",
+    ]
+
+    for col in text_cols:
+        if col in df.columns:
+            df[col] = df[col].astype("object")
+
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    return df
 
 
 def next_trade_id(journal: pd.DataFrame) -> int:
@@ -1313,6 +1358,7 @@ with tabs[2]:
             )
 
             journal = pd.concat([journal, new], ignore_index=True)
+            journal = normalize_journal_dtypes(journal)
             save_journal(journal)
             st.success("Entry logged as OPEN. Refresh if it does not appear immediately.")
 
@@ -1362,19 +1408,17 @@ with tabs[2]:
                     if close_notes.strip():
                         combined_notes = (existing_notes + "\nExit: " + close_notes.strip()).strip()
 
-                    # Cast text columns before assigning strings.
-                    journal["Status"] = journal["Status"].astype("object")
-                    journal["Exit Date/Time"] = journal["Exit Date/Time"].astype("object")
-                    journal["Win/Loss"] = journal["Win/Loss"].astype("object")
-                    journal["Notes"] = journal["Notes"].astype("object")
+                    # Normalize dtypes before assigning values.
+                    journal = normalize_journal_dtypes(journal)
 
-                    journal.loc[idx, "Status"] = "CLOSED"
-                    journal.loc[idx, "Exit Date/Time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    journal.loc[idx, "Exit Price"] = exit_price
-                    journal.loc[idx, "Profit/Loss"] = pnl
-                    journal.loc[idx, "Win/Loss"] = result
-                    journal.loc[idx, "Notes"] = combined_notes
+                    journal.at[idx, "Status"] = "CLOSED"
+                    journal.at[idx, "Exit Date/Time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    journal.at[idx, "Exit Price"] = float(exit_price)
+                    journal.at[idx, "Profit/Loss"] = float(pnl)
+                    journal.at[idx, "Win/Loss"] = str(result)
+                    journal.at[idx, "Notes"] = str(combined_notes)
 
+                    journal = normalize_journal_dtypes(journal)
                     save_journal(journal)
 
                     st.success(f"Trade closed: {result} | P/L: {fmt_money(pnl)}")
