@@ -181,6 +181,29 @@ def pnl_metric_card(label, value):
     )
 
 
+def format_journal_table(df: pd.DataFrame):
+    """
+    Display-only formatting for journal tables.
+    Keeps calculations unchanged but shows prices/P&L cleanly.
+    """
+    format_map = {}
+
+    for col in ["Strike", "Entry Price", "Exit Price", "Profit/Loss", "Real POP %", "Chance ITM %", "Touch %", "Delta"]:
+        if col in df.columns:
+            format_map[col] = "{:.2f}"
+
+    if "Trade Rank" in df.columns:
+        format_map["Trade Rank"] = "{:.0f}"
+
+    if "Contracts" in df.columns:
+        format_map["Contracts"] = "{:.0f}"
+
+    try:
+        return df.style.format(format_map)
+    except Exception:
+        return df
+
+
 def fmt_number(x) -> str:
     try:
         if x is None or pd.isna(x):
@@ -1407,7 +1430,7 @@ with tabs[2]:
     if open_trades.empty:
         st.info("No open positions.")
     else:
-        st.dataframe(open_trades, use_container_width=True, height=260)
+        st.dataframe(format_journal_table(open_trades), use_container_width=True, height=260)
 
         st.markdown("### Close a Position")
 
@@ -1484,10 +1507,24 @@ with tabs[2]:
             pnl_metric_card("Total P/L", total_pnl)
 
         try:
-            styled_closed = closed_trades.style.apply(
+            format_map = {
+                "Strike": "{:.2f}",
+                "Entry Price": "{:.2f}",
+                "Exit Price": "{:.2f}",
+                "Profit/Loss": "{:.2f}",
+                "Real POP %": "{:.2f}",
+                "Chance ITM %": "{:.2f}",
+                "Touch %": "{:.2f}",
+                "Delta": "{:.2f}",
+                "Trade Rank": "{:.0f}",
+                "Contracts": "{:.0f}",
+            }
+            format_map = {k: v for k, v in format_map.items() if k in closed_trades.columns}
+
+            styled_closed = closed_trades.style.format(format_map).apply(
                 lambda col: [
-                    "color: #16a34a; font-weight: 700;" if float(v) > 0 else
-                    "color: #dc2626; font-weight: 700;" if float(v) < 0 else
+                    "color: #16a34a; font-weight: 700;" if pd.to_numeric(v, errors="coerce") > 0 else
+                    "color: #dc2626; font-weight: 700;" if pd.to_numeric(v, errors="coerce") < 0 else
                     "color: #6b7280;"
                     for v in col
                 ] if col.name == "Profit/Loss" else ["" for _ in col],
@@ -1495,13 +1532,13 @@ with tabs[2]:
             )
             st.dataframe(styled_closed, use_container_width=True, height=360)
         except Exception:
-            st.dataframe(closed_trades, use_container_width=True, height=360)
+            st.dataframe(format_journal_table(closed_trades), use_container_width=True, height=360)
 
     st.divider()
 
     if not journal.empty:
         st.markdown("### Full Journal")
-        st.dataframe(journal, use_container_width=True, height=300)
+        st.dataframe(format_journal_table(journal), use_container_width=True, height=300)
 
         st.download_button(
             "Download Journal CSV",
