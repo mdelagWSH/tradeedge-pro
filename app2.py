@@ -905,42 +905,24 @@ def save_journal(df: pd.DataFrame):
 def normalize_journal_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     """
     Keeps journal columns writable on Streamlit Cloud.
-    Pandas can infer blank columns as numeric, then crash when text/timestamps are assigned.
+    Store most journal columns as object to avoid pandas dtype crashes.
+    Convert to numeric only at calculation time.
     """
     df = df.copy()
 
-    text_cols = [
-        "Status",
-        "Entry Date/Time",
-        "Exit Date/Time",
-        "Ticker",
-        "Trade Type",
-        "Expiration",
-        "Win/Loss",
-        "Notes",
-    ]
+    for col in journal_columns():
+        if col not in df.columns:
+            df[col] = ""
 
-    numeric_cols = [
-        "Trade ID",
-        "Strike",
-        "Entry Price",
-        "Exit Price",
-        "Contracts",
-        "Profit/Loss",
-        "Real POP %",
-        "Chance ITM %",
-        "Touch %",
-        "Delta",
-        "Trade Rank",
-    ]
+    # Keep every journal column object-friendly so strings/timestamps can be written safely.
+    for col in df.columns:
+        df[col] = df[col].astype("object")
 
-    for col in text_cols:
-        if col in df.columns:
-            df[col] = df[col].astype("object")
+    if "Trade ID" in df.columns:
+        df["Trade ID"] = pd.to_numeric(df["Trade ID"], errors="coerce").astype("Int64")
 
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "Contracts" in df.columns:
+        df["Contracts"] = pd.to_numeric(df["Contracts"], errors="coerce").fillna(1).astype(int)
 
     return df
 
@@ -1340,18 +1322,18 @@ with tabs[2]:
                         "Exit Date/Time": "",
                         "Ticker": j_ticker.upper().strip(),
                         "Trade Type": j_type,
-                        "Strike": j_strike,
+                        "Strike": float(j_strike),
                         "Expiration": j_exp.strftime("%Y-%m-%d"),
-                        "Entry Price": entry,
-                        "Exit Price": np.nan,
+                        "Entry Price": float(entry),
+                        "Exit Price": "",
                         "Contracts": int(contracts),
-                        "Profit/Loss": np.nan,
+                        "Profit/Loss": "",
                         "Win/Loss": "",
-                        "Real POP %": j_real_pop,
-                        "Chance ITM %": np.nan,
-                        "Touch %": j_touch,
-                        "Delta": j_delta,
-                        "Trade Rank": j_rank,
+                        "Real POP %": float(j_real_pop),
+                        "Chance ITM %": "",
+                        "Touch %": float(j_touch),
+                        "Delta": float(j_delta),
+                        "Trade Rank": int(j_rank),
                         "Notes": j_notes,
                     }
                 ]
