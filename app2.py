@@ -910,6 +910,619 @@ def prepare_options(df: pd.DataFrame, price: float, expiration: str, typ: str):
 
 
 # =========================
+# STRATEGY SCANNER
+# =========================
+STRATEGY_CHOICES = [
+    "Credit Spreads",
+    "Iron Condors",
+    "Covered Calls",
+    "Cash Secured Puts",
+]
+
+
+def expiration_dte(expiration: str):
+    try:
+        return max((datetime.strptime(expiration, "%Y-%m-%d").date() - date.today()).days, 1)
+    except Exception:
+        return None
+
+
+def select_strategy_expirations(expirations, min_dte: int, max_dte: int, limit: int):
+    selected = []
+
+    for exp in expirations:
+        dte = expiration_dte(exp)
+        if dte is None:
+            continue
+        if min_dte <= dte <= max_dte:
+            selected.append((exp, dte))
+
+    return selected[: max(int(limit), 1)]
+
+
+def option_sell_price(row) -> float:
+    bid = safe_num(row.get("bid"), 0)
+    return bid if bid > 0 else 0.0
+
+
+def option_buy_price(row) -> float:
+    ask = safe_num(row.get("ask"), 0)
+    last = safe_num(row.get("lastPrice"), 0)
+
+    if ask > 0:
+        return ask
+    if last > 0:
+        return last
+    return 0.0
+
+
+def option_leg_spread(row) -> float:
+    bid = safe_num(row.get("bid"), 0)
+    ask = safe_num(row.get("ask"), 0)
+
+    if bid > 0 and ask > 0 and ask >= bid:
+        return ask - bid
+    return np.nan
+
+
+def add_trade_prices(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+
+    out = df.copy()
+    out["Sell Price"] = out.apply(option_sell_price, axis=1)
+    out["Buy Price"] = out.apply(option_buy_price, axis=1)
+    out["Leg Spread"] = out.apply(option_leg_spread, axis=1)
+    return out
+
+
+def chance_option_expires_otm(row) -> float:
+    chance_itm = safe_num(row.get("Chance ITM %"), np.nan)
+
+    if pd.isna(chance_itm):
+        chance_itm = abs(safe_num(row.get("Delta"), 0)) * 100
+
+    return max(0, min(100, 100 - chance_itm))
+
+
+def probability_between_strikes(S: float, lower: float, upper: float, days: int, iv: float, r: float = 0.045):
+    try:
+        S = float(S)
+        lower = float(lower)
+        upper = float(upper)
+        days = max(float(days), 1)
+        T = days / 365
+        iv = float(iv)
+
+        if iv > 3:
+            iv = iv / 100
+
+        if S <= 0 or lower <= 0 or upper <= lower or T <= 0 or iv <= 0:
+            return None
+
+        sigma_sqrt_t = iv * math.sqrt(T)
+        if sigma_sqrt_t <= 0:
+            return None
+
+        d2_lower = (math.log(S / lower) + (r - 0.5 * iv**2) * T) / sigma_sqrt_t
+        d2_upper = (math.log(S / upper) + (r - 0.5 * iv**2) * T) / sigma_sqrt_t
+        prob = norm.cdf(d2_lower) - norm.cdf(d2_upper)
+
+        return round(max(0, min(prob, 1)) * 100, 2)
+
+    except Exception:
+        return None
+
+
+def leg_liquidity_stats(legs):
+    volumes = [safe_num(leg.get("volume"), 0) for leg in legs]
+    open_interests = [safe_num(leg.get("openInterest"), 0) for leg in legs]
+    spreads = [safe_num(leg.get("Leg Spread"), np.nan) for leg in legs]
+    ivs = [clean_iv(leg.get("IV")) for leg in legs]
+
+    valid_spreads = [s for s in spreads if not pd.isna(s)]
+
+    return {
+        "Min Volume": min(volumes) if volumes else 0,
+        "Min Open Interest": min(open_interests) if open_interests else 0,
+        "Avg Leg Spread": float(np.mean(valid_spreads)) if valid_spreads else np.nan,
+        "Avg IV": float(np.mean(ivs)) if ivs else 0.30,
+    }
+
+
+def strategy_signal_fit(strategy: str, stock_score: float) -> int:
+    if strategy in ["Bull Put Credit Spread", "Cash Secured Put"]:
+        if stock_score >= 65:
+            return 15
+        if stock_score >= 50:
+            return 8
+        if stock_score <= 35:
+            return -10
+        return 0
+
+    if strategy == "Bear Call Credit Spread":
+        if stock_score <= 35:
+            return 15
+        if stock_score <= 50:
+            return 8
+        if stock_score >= 65:
+            return -10
+        return 0
+
+    if strategy == "Iron Condor":
+        if 40 <= stock_score <= 60:
+            return 15
+        if 35 <= stock_score <= 65:
+            return 8
+        if stock_score <= 20 or stock_score >= 80:
+            return -10
+        return 0
+
+    if strategy == "Covered Call":
+        if 50 <= stock_score <= 75:
+            return 15
+        if 40 <= stock_score <= 85:
+            return 8
+        if stock_score < 30:
+            return -8
+        return 0
+
+    return 0
+
+
+def score_income_strategy(row) -> int:
+    score = 0
+
+    pop = safe_num(row.get("POP %"), 0)
+    return_on_risk = safe_num(row.get("Return on Risk %"), 0)
+    annualized_return = safe_num(row.get("Annualized Return %"), 0)
+    min_volume = safe_num(row.get("Min Volume"), 0)
+    min_oi = safe_num(row.get("Min Open Interest"), 0)
+    avg_spread = safe_num(row.get("Avg Leg Spread"), 999)
+    stock_score = safe_num(row.get("Stock Score"), 50)
+    strategy = str(row.get("Strategy", ""))
+
+    if pop >= 80:
+        score += 35
+    elif pop >= 70:
+        score += 30
+    elif pop >= 60:
+        score += 22
+    elif pop >= 50:
+        score += 12
+    else:
+        score -= 10
+
+    if return_on_risk >= 35:
+        score += 25
+    elif return_on_risk >= 25:
+        score += 20
+    elif return_on_risk >= 15:
+        score += 14
+    elif return_on_risk >= 8:
+        score += 8
+
+    if annualized_return >= 100:
+        score += 10
+    elif annualized_return >= 50:
+        score += 7
+    elif annualized_return >= 25:
+        score += 4
+
+    if min_volume >= 100 and min_oi >= 500:
+        score += 10
+    elif min_volume >= 25 and min_oi >= 100:
+        score += 7
+    elif min_oi >= 50:
+        score += 4
+
+    if avg_spread <= 0.10:
+        score += 10
+    elif avg_spread <= 0.30:
+        score += 7
+    elif avg_spread <= 0.60:
+        score += 3
+    else:
+        score -= 8
+
+    score += strategy_signal_fit(strategy, stock_score)
+
+    return max(0, min(100, int(score)))
+
+
+def strategy_note(strategy: str, stock_signal: str, pop: float, return_on_risk: float) -> str:
+    if strategy == "Iron Condor":
+        return f"Neutral income setup; stock signal is {stock_signal}."
+    if strategy == "Covered Call":
+        return f"Income against shares; assignment possible above short call."
+    if strategy == "Cash Secured Put":
+        return f"Income entry setup; assignment possible below short put."
+    if "Bull Put" in strategy:
+        return f"Bullish/neutral credit spread; POP {pop:.1f}%, ROR {return_on_risk:.1f}%."
+    if "Bear Call" in strategy:
+        return f"Bearish/neutral credit spread; POP {pop:.1f}%, ROR {return_on_risk:.1f}%."
+    return f"Stock signal is {stock_signal}."
+
+
+def make_credit_spread_row(symbol, price, expiration, dte, short_leg, long_leg, typ, stock_signal):
+    short_strike = safe_num(short_leg.get("strike"), 0)
+    long_strike = safe_num(long_leg.get("strike"), 0)
+
+    if short_strike <= 0 or long_strike <= 0:
+        return None
+
+    if typ == "PUT":
+        width = short_strike - long_strike
+        strategy = "Bull Put Credit Spread"
+    else:
+        width = long_strike - short_strike
+        strategy = "Bear Call Credit Spread"
+
+    if width <= 0:
+        return None
+
+    credit = option_sell_price(short_leg) - option_buy_price(long_leg)
+    if credit <= 0.05 or credit >= width or credit / width < 0.08:
+        return None
+
+    max_profit = credit * 100
+    max_loss = (width - credit) * 100
+    if max_loss <= 0:
+        return None
+
+    pop = chance_option_expires_otm(short_leg)
+    return_on_risk = max_profit / max_loss * 100
+    annualized_return = return_on_risk * 365 / max(dte, 1)
+
+    if typ == "PUT":
+        breakeven = short_strike - credit
+        short_put = short_strike
+        long_put = long_strike
+        short_call = np.nan
+        long_call = np.nan
+        legs_text = f"Sell {short_strike:g}P / Buy {long_strike:g}P"
+    else:
+        breakeven = short_strike + credit
+        short_put = np.nan
+        long_put = np.nan
+        short_call = short_strike
+        long_call = long_strike
+        legs_text = f"Sell {short_strike:g}C / Buy {long_strike:g}C"
+
+    liquidity = leg_liquidity_stats([short_leg, long_leg])
+    stock_score = safe_num(stock_signal.get("score"), 50)
+
+    row = {
+        "Ticker": symbol,
+        "Strategy": strategy,
+        "Expiration": expiration,
+        "DTE": dte,
+        "Price": price,
+        "Signal": stock_signal.get("signal", "NEUTRAL"),
+        "Stock Score": stock_score,
+        "Short Strike": short_strike,
+        "Long Strike": long_strike,
+        "Short Put": short_put,
+        "Long Put": long_put,
+        "Short Call": short_call,
+        "Long Call": long_call,
+        "Credit": credit,
+        "Width": width,
+        "Max Profit": max_profit,
+        "Max Loss": max_loss,
+        "Breakeven": breakeven,
+        "POP %": pop,
+        "Return on Risk %": return_on_risk,
+        "Annualized Return %": annualized_return,
+        "Delta": abs(safe_num(short_leg.get("Delta"), 0)),
+        "Legs": legs_text,
+        "Short Contract": short_leg.get("contractSymbol", ""),
+        "Long Contract": long_leg.get("contractSymbol", ""),
+        **liquidity,
+    }
+    row["Trade Rank"] = score_income_strategy(row)
+    row["Notes"] = strategy_note(strategy, row["Signal"], pop, return_on_risk)
+
+    return row
+
+
+def build_credit_spreads(symbol, price, expiration, dte, calls, puts, stock_signal):
+    rows = []
+    max_width = max(price * 0.10, 5)
+
+    if puts is not None and not puts.empty:
+        put_df = add_trade_prices(puts)
+        short_puts = put_df[
+            (put_df["strike"] < price) &
+            (put_df["Sell Price"] > 0) &
+            (put_df["Delta"].abs().between(0.10, 0.45, inclusive="both"))
+        ].sort_values("strike", ascending=False)
+
+        for _, short_leg in short_puts.head(14).iterrows():
+            short_strike = safe_num(short_leg.get("strike"), 0)
+            long_puts = put_df[
+                (put_df["strike"] < short_strike) &
+                (put_df["Buy Price"] > 0) &
+                ((short_strike - put_df["strike"]) <= max_width)
+            ].sort_values("strike", ascending=False)
+
+            for _, long_leg in long_puts.head(4).iterrows():
+                row = make_credit_spread_row(
+                    symbol, price, expiration, dte, short_leg, long_leg, "PUT", stock_signal
+                )
+                if row:
+                    rows.append(row)
+
+    if calls is not None and not calls.empty:
+        call_df = add_trade_prices(calls)
+        short_calls = call_df[
+            (call_df["strike"] > price) &
+            (call_df["Sell Price"] > 0) &
+            (call_df["Delta"].abs().between(0.10, 0.45, inclusive="both"))
+        ].sort_values("strike", ascending=True)
+
+        for _, short_leg in short_calls.head(14).iterrows():
+            short_strike = safe_num(short_leg.get("strike"), 0)
+            long_calls = call_df[
+                (call_df["strike"] > short_strike) &
+                (call_df["Buy Price"] > 0) &
+                ((call_df["strike"] - short_strike) <= max_width)
+            ].sort_values("strike", ascending=True)
+
+            for _, long_leg in long_calls.head(4).iterrows():
+                row = make_credit_spread_row(
+                    symbol, price, expiration, dte, short_leg, long_leg, "CALL", stock_signal
+                )
+                if row:
+                    rows.append(row)
+
+    return rows
+
+
+def build_covered_calls(symbol, price, expiration, dte, calls, stock_signal):
+    if calls is None or calls.empty or price <= 0:
+        return []
+
+    rows = []
+    call_df = add_trade_prices(calls)
+    call_df = call_df[
+        (call_df["strike"] > price) &
+        (call_df["Sell Price"] > 0) &
+        (call_df["Delta"].abs().between(0.10, 0.45, inclusive="both"))
+    ].sort_values("Trade Rank", ascending=False)
+
+    for _, short_leg in call_df.head(18).iterrows():
+        short_strike = safe_num(short_leg.get("strike"), 0)
+        credit = option_sell_price(short_leg)
+        if short_strike <= price or credit <= 0:
+            continue
+
+        share_cost = price * 100
+        max_profit = (short_strike - price + credit) * 100
+        max_loss = max((price - credit) * 100, 0)
+        income_yield = credit / price * 100
+        annualized_return = income_yield * 365 / max(dte, 1)
+        pop = chance_option_expires_otm(short_leg)
+        liquidity = leg_liquidity_stats([short_leg])
+
+        row = {
+            "Ticker": symbol,
+            "Strategy": "Covered Call",
+            "Expiration": expiration,
+            "DTE": dte,
+            "Price": price,
+            "Signal": stock_signal.get("signal", "NEUTRAL"),
+            "Stock Score": safe_num(stock_signal.get("score"), 50),
+            "Short Strike": short_strike,
+            "Long Strike": np.nan,
+            "Short Put": np.nan,
+            "Long Put": np.nan,
+            "Short Call": short_strike,
+            "Long Call": np.nan,
+            "Credit": credit,
+            "Width": np.nan,
+            "Max Profit": max_profit,
+            "Max Loss": max_loss,
+            "Breakeven": price - credit,
+            "POP %": pop,
+            "Return on Risk %": income_yield,
+            "Annualized Return %": annualized_return,
+            "Delta": abs(safe_num(short_leg.get("Delta"), 0)),
+            "Legs": f"Own 100 shares / Sell {short_strike:g}C",
+            "Short Contract": short_leg.get("contractSymbol", ""),
+            "Long Contract": "",
+            **liquidity,
+        }
+        row["Trade Rank"] = score_income_strategy(row)
+        row["Notes"] = strategy_note("Covered Call", row["Signal"], pop, income_yield)
+        rows.append(row)
+
+    return rows
+
+
+def build_cash_secured_puts(symbol, price, expiration, dte, puts, stock_signal):
+    if puts is None or puts.empty:
+        return []
+
+    rows = []
+    put_df = add_trade_prices(puts)
+    put_df = put_df[
+        (put_df["strike"] < price) &
+        (put_df["Sell Price"] > 0) &
+        (put_df["Delta"].abs().between(0.10, 0.40, inclusive="both"))
+    ].sort_values("Trade Rank", ascending=False)
+
+    for _, short_leg in put_df.head(18).iterrows():
+        short_strike = safe_num(short_leg.get("strike"), 0)
+        credit = option_sell_price(short_leg)
+        if short_strike <= 0 or credit <= 0:
+            continue
+
+        max_profit = credit * 100
+        max_loss = max((short_strike - credit) * 100, 0)
+        income_yield = credit / short_strike * 100
+        annualized_return = income_yield * 365 / max(dte, 1)
+        pop = chance_option_expires_otm(short_leg)
+        liquidity = leg_liquidity_stats([short_leg])
+
+        row = {
+            "Ticker": symbol,
+            "Strategy": "Cash Secured Put",
+            "Expiration": expiration,
+            "DTE": dte,
+            "Price": price,
+            "Signal": stock_signal.get("signal", "NEUTRAL"),
+            "Stock Score": safe_num(stock_signal.get("score"), 50),
+            "Short Strike": short_strike,
+            "Long Strike": np.nan,
+            "Short Put": short_strike,
+            "Long Put": np.nan,
+            "Short Call": np.nan,
+            "Long Call": np.nan,
+            "Credit": credit,
+            "Width": np.nan,
+            "Max Profit": max_profit,
+            "Max Loss": max_loss,
+            "Breakeven": short_strike - credit,
+            "POP %": pop,
+            "Return on Risk %": income_yield,
+            "Annualized Return %": annualized_return,
+            "Delta": abs(safe_num(short_leg.get("Delta"), 0)),
+            "Legs": f"Sell {short_strike:g}P cash secured",
+            "Short Contract": short_leg.get("contractSymbol", ""),
+            "Long Contract": "",
+            **liquidity,
+        }
+        row["Trade Rank"] = score_income_strategy(row)
+        row["Notes"] = strategy_note("Cash Secured Put", row["Signal"], pop, income_yield)
+        rows.append(row)
+
+    return rows
+
+
+def build_iron_condors(symbol, price, expiration, dte, credit_spreads, stock_signal):
+    if not credit_spreads:
+        return []
+
+    put_spreads = sorted(
+        [r for r in credit_spreads if r["Strategy"] == "Bull Put Credit Spread"],
+        key=lambda r: r["Trade Rank"],
+        reverse=True,
+    )[:10]
+    call_spreads = sorted(
+        [r for r in credit_spreads if r["Strategy"] == "Bear Call Credit Spread"],
+        key=lambda r: r["Trade Rank"],
+        reverse=True,
+    )[:10]
+
+    rows = []
+
+    for put_row in put_spreads:
+        for call_row in call_spreads:
+            short_put = safe_num(put_row.get("Short Put"), 0)
+            short_call = safe_num(call_row.get("Short Call"), 0)
+
+            if short_put <= 0 or short_call <= 0 or short_put >= short_call:
+                continue
+
+            credit = safe_num(put_row.get("Credit"), 0) + safe_num(call_row.get("Credit"), 0)
+            width = max(safe_num(put_row.get("Width"), 0), safe_num(call_row.get("Width"), 0))
+
+            if credit <= 0.10 or width <= 0 or credit >= width:
+                continue
+
+            max_profit = credit * 100
+            max_loss = (width - credit) * 100
+            if max_loss <= 0:
+                continue
+
+            avg_iv = np.mean([safe_num(put_row.get("Avg IV"), 0.30), safe_num(call_row.get("Avg IV"), 0.30)])
+            pop = probability_between_strikes(price, short_put, short_call, dte, avg_iv)
+            if pop is None:
+                pop = min(safe_num(put_row.get("POP %"), 0), safe_num(call_row.get("POP %"), 0))
+
+            return_on_risk = max_profit / max_loss * 100
+            annualized_return = return_on_risk * 365 / max(dte, 1)
+            min_volume = min(safe_num(put_row.get("Min Volume"), 0), safe_num(call_row.get("Min Volume"), 0))
+            min_oi = min(
+                safe_num(put_row.get("Min Open Interest"), 0),
+                safe_num(call_row.get("Min Open Interest"), 0),
+            )
+            avg_spread = np.nanmean([
+                safe_num(put_row.get("Avg Leg Spread"), np.nan),
+                safe_num(call_row.get("Avg Leg Spread"), np.nan),
+            ])
+
+            row = {
+                "Ticker": symbol,
+                "Strategy": "Iron Condor",
+                "Expiration": expiration,
+                "DTE": dte,
+                "Price": price,
+                "Signal": stock_signal.get("signal", "NEUTRAL"),
+                "Stock Score": safe_num(stock_signal.get("score"), 50),
+                "Short Strike": np.nan,
+                "Long Strike": np.nan,
+                "Short Put": short_put,
+                "Long Put": safe_num(put_row.get("Long Put"), 0),
+                "Short Call": short_call,
+                "Long Call": safe_num(call_row.get("Long Call"), 0),
+                "Credit": credit,
+                "Width": width,
+                "Max Profit": max_profit,
+                "Max Loss": max_loss,
+                "Breakeven": np.nan,
+                "Lower Breakeven": short_put - credit,
+                "Upper Breakeven": short_call + credit,
+                "POP %": pop,
+                "Return on Risk %": return_on_risk,
+                "Annualized Return %": annualized_return,
+                "Delta": np.nan,
+                "Legs": (
+                    f"Sell {short_put:g}P / Buy {safe_num(put_row.get('Long Put'), 0):g}P + "
+                    f"Sell {short_call:g}C / Buy {safe_num(call_row.get('Long Call'), 0):g}C"
+                ),
+                "Short Contract": f"{put_row.get('Short Contract', '')} / {call_row.get('Short Contract', '')}",
+                "Long Contract": f"{put_row.get('Long Contract', '')} / {call_row.get('Long Contract', '')}",
+                "Min Volume": min_volume,
+                "Min Open Interest": min_oi,
+                "Avg Leg Spread": avg_spread,
+                "Avg IV": avg_iv,
+            }
+            row["Trade Rank"] = score_income_strategy(row)
+            row["Notes"] = strategy_note("Iron Condor", row["Signal"], pop, return_on_risk)
+            rows.append(row)
+
+    return rows
+
+
+def format_strategy_table(df: pd.DataFrame):
+    format_map = {
+        "Price": "${:,.2f}",
+        "Credit": "${:,.2f}",
+        "Width": "{:.2f}",
+        "Max Profit": "${:,.0f}",
+        "Max Loss": "${:,.0f}",
+        "Breakeven": "${:,.2f}",
+        "Lower Breakeven": "${:,.2f}",
+        "Upper Breakeven": "${:,.2f}",
+        "POP %": "{:.1f}",
+        "Return on Risk %": "{:.1f}",
+        "Annualized Return %": "{:.1f}",
+        "Delta": "{:.2f}",
+        "Avg Leg Spread": "{:.2f}",
+        "Avg IV": "{:.1%}",
+        "Trade Rank": "{:.0f}",
+    }
+    format_map = {k: v for k, v in format_map.items() if k in df.columns}
+
+    try:
+        return df.style.format(format_map, na_rep="")
+    except Exception:
+        return df
+
+
+# =========================
 # JOURNAL
 # =========================
 def journal_columns():
@@ -1555,44 +2168,179 @@ with tabs[2]:
 # SCANNER TAB
 # =========================
 with tabs[3]:
-    st.subheader("Multi-Stock Scanner")
+    st.subheader("Multi-Stock Strategy Scanner")
 
     scan_text = st.text_area("Tickers", SCAN_DEFAULT)
     scan_list = [x.strip().upper() for x in scan_text.replace("\n", ",").split(",") if x.strip()]
 
-    if st.button("Run Scanner"):
-        rows = []
+    scan_strategies = st.multiselect(
+        "Strategies",
+        STRATEGY_CHOICES,
+        default=STRATEGY_CHOICES,
+    )
 
-        with st.spinner("Scanning tickers..."):
+    s1, s2, s3, s4 = st.columns(4)
+    with s1:
+        scan_min_dte = st.number_input("Min DTE", min_value=1, max_value=365, value=14, step=1)
+    with s2:
+        scan_max_dte = st.number_input("Max DTE", min_value=1, max_value=365, value=60, step=1)
+    with s3:
+        scan_exp_limit = st.slider("Expirations per Ticker", 1, 6, 3)
+    with s4:
+        scan_min_rank = st.slider("Minimum Trade Rank", 0, 100, 55, 5)
+
+    scan_top_per_ticker = st.slider("Top Trades per Ticker", 1, 10, 3)
+
+    if st.button("Run Scanner"):
+        if not scan_strategies:
+            st.warning("Select at least one strategy to scan.")
+            st.stop()
+
+        if scan_max_dte < scan_min_dte:
+            st.warning("Max DTE must be greater than or equal to Min DTE.")
+            st.stop()
+
+        rows = []
+        skipped = []
+
+        with st.spinner("Scanning tickers and option chains..."):
             for symbol in scan_list:
                 try:
                     d = load_data(symbol, "3mo", "1d")
                     if d.empty:
+                        skipped.append(f"{symbol}: no price data")
                         continue
 
                     _, sig = calculate_signal(d)
-
-                    rows.append(
-                        {
-                            "Ticker": symbol,
-                            "Price": round(sig["price"], 2),
-                            "RSI": round(sig["rsi"], 1),
-                            "VWAP": round(sig["vwap"], 2),
-                            "Score": sig["score"],
-                            "Signal": sig["signal"],
-                            "Entry Low": round(sig["entry_low"], 2),
-                            "Entry High": round(sig["entry_high"], 2),
-                            "Exit": round(sig["bullish_exit"], 2),
-                        }
+                    scan_price = safe_num(sig.get("price"), 0)
+                    expirations = get_options_expirations(symbol)
+                    selected_expirations = select_strategy_expirations(
+                        expirations,
+                        int(scan_min_dte),
+                        int(scan_max_dte),
+                        int(scan_exp_limit),
                     )
-                except Exception:
-                    continue
+
+                    if scan_price <= 0 or not selected_expirations:
+                        skipped.append(f"{symbol}: no usable expirations")
+                        continue
+
+                    need_calls = any(
+                        strategy in scan_strategies
+                        for strategy in ["Credit Spreads", "Iron Condors", "Covered Calls"]
+                    )
+                    need_puts = any(
+                        strategy in scan_strategies
+                        for strategy in ["Credit Spreads", "Iron Condors", "Cash Secured Puts"]
+                    )
+
+                    for exp, dte in selected_expirations:
+                        calls = pd.DataFrame()
+                        puts = pd.DataFrame()
+
+                        if need_calls:
+                            raw_calls = load_option_chain(symbol, exp, "CALL")
+                            if not raw_calls.empty:
+                                calls, _ = prepare_options(raw_calls, scan_price, exp, "CALL")
+
+                        if need_puts:
+                            raw_puts = load_option_chain(symbol, exp, "PUT")
+                            if not raw_puts.empty:
+                                puts, _ = prepare_options(raw_puts, scan_price, exp, "PUT")
+
+                        credit_spreads = []
+                        if "Credit Spreads" in scan_strategies or "Iron Condors" in scan_strategies:
+                            credit_spreads = build_credit_spreads(
+                                symbol, scan_price, exp, dte, calls, puts, sig
+                            )
+
+                        if "Credit Spreads" in scan_strategies:
+                            rows.extend(credit_spreads)
+
+                        if "Iron Condors" in scan_strategies:
+                            rows.extend(
+                                build_iron_condors(symbol, scan_price, exp, dte, credit_spreads, sig)
+                            )
+
+                        if "Covered Calls" in scan_strategies:
+                            rows.extend(build_covered_calls(symbol, scan_price, exp, dte, calls, sig))
+
+                        if "Cash Secured Puts" in scan_strategies:
+                            rows.extend(build_cash_secured_puts(symbol, scan_price, exp, dte, puts, sig))
+
+                except Exception as exc:
+                    skipped.append(f"{symbol}: {exc}")
 
         if rows:
-            scan_df = pd.DataFrame(rows).sort_values("Score", ascending=False)
-            st.dataframe(scan_df, use_container_width=True)
+            scan_df = pd.DataFrame(rows)
+            scan_df = scan_df[scan_df["Trade Rank"] >= scan_min_rank]
+            scan_df = scan_df.sort_values(["Trade Rank", "POP %", "Annualized Return %"], ascending=False)
+
+            if scan_df.empty:
+                st.warning("No strategy candidates met the minimum rank. Lower the rank filter or widen DTE.")
+            else:
+                best = scan_df.iloc[0]
+                st.success(
+                    f"Best trade: {best['Ticker']} {best['Strategy']} | "
+                    f"{best['Legs']} | Exp {best['Expiration']} | "
+                    f"Rank {best['Trade Rank']:.0f}/100 | POP {best['POP %']:.1f}% | "
+                    f"Credit {fmt_money(best['Credit'])}"
+                )
+
+                best_by_ticker = (
+                    scan_df.groupby("Ticker", group_keys=False)
+                    .head(int(scan_top_per_ticker))
+                    .reset_index(drop=True)
+                )
+
+                display_cols = [
+                    "Ticker",
+                    "Strategy",
+                    "Expiration",
+                    "DTE",
+                    "Trade Rank",
+                    "Price",
+                    "Signal",
+                    "Stock Score",
+                    "Legs",
+                    "Credit",
+                    "Width",
+                    "Max Profit",
+                    "Max Loss",
+                    "POP %",
+                    "Return on Risk %",
+                    "Annualized Return %",
+                    "Breakeven",
+                    "Lower Breakeven",
+                    "Upper Breakeven",
+                    "Delta",
+                    "Min Volume",
+                    "Min Open Interest",
+                    "Avg Leg Spread",
+                    "Notes",
+                ]
+                display_cols = [c for c in display_cols if c in best_by_ticker.columns]
+
+                st.markdown("### Best Ranked Trades")
+                st.dataframe(
+                    format_strategy_table(best_by_ticker[display_cols]),
+                    use_container_width=True,
+                    height=560,
+                )
+
+                csv_cols = [c for c in scan_df.columns if c not in ["Short Contract", "Long Contract"]]
+                st.download_button(
+                    "Download Strategy Scanner CSV",
+                    scan_df[csv_cols].to_csv(index=False),
+                    "strategy_scanner_results.csv",
+                    "text/csv",
+                )
         else:
-            st.warning("Scanner returned no results.")
+            st.warning("Scanner returned no strategy candidates.")
+
+        if skipped:
+            with st.expander("Skipped tickers / notes"):
+                st.write(pd.DataFrame({"Note": skipped}))
 
 
 # =========================
